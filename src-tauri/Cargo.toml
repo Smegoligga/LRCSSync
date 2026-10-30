@@ -1,6 +1,6 @@
 [package]
 name = "lrcssync"
-version = "0.2.0"
+version = "0.2.1"
 description = "Sync .lrc lyrics easier, faster and better"
 edition = "2021"
 license = "GPL-2.0-only"

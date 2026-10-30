@@ -31,6 +31,7 @@ Get the latest build from [Releases](https://github.com/Smegoligga/LRCSSync/rele
 | macOS | `universal.dmg` |
 | Linux | `.AppImage` or `.deb` |
 | Android | `android.apk` |
+| Web | `web.html` (the whole editor in one file, opens in any browser) |
 
 The builds aren't signed by Apple or Microsoft, so you may get a warning the first time. On macOS, if it says the app is damaged, run `xattr -cr /Applications/LRCSSync.app` once.
 
@@ -64,6 +65,8 @@ npx tauri android build --apk
 ```
 
 Every push to `main` builds all platforms with GitHub Actions and publishes them in one pre-release named after the version in `src-tauri/tauri.conf.json`. Release notes come from `release-notes/<version>.md`.
+
+Web build: `npm run build:web` writes `dist/lrcssync-web.html`.
 
 Tests: `npm test` (editor logic) and `cargo test --manifest-path core/Cargo.toml` (audio analysis).
 

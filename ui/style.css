@@ -64,6 +64,8 @@ input, textarea { background: #0c0e14; border: 1px solid var(--line); border-rad
 .brand { display: flex; align-items: center; gap: 8px; font-weight: 700; letter-spacing: .2px; }
 .brand img { width: 26px; height: 26px; }
 .file { flex: 1; min-width: 0; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.account { color: var(--muted); font-size: 13px; white-space: nowrap; }
+.account:empty { display: none; }
 .actions { display: flex; gap: 6px; position: relative; }
 .menu {
   position: absolute; right: 0; top: 40px; z-index: 20;

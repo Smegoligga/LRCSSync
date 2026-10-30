@@ -1,0 +1,33 @@
+// Builds a single self-contained HTML file of the editor for the web (lyrics.smegolas.com).
+// Usage: node scripts/build-web.mjs [out.html]
+import { build } from 'esbuild';
+import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { dirname } from 'node:path';
+
+const out = process.argv[2] || 'dist/lrcssync-web.html';
+const version = JSON.parse(readFileSync('src-tauri/tauri.conf.json', 'utf8')).version.replace(/\.0$/, '');
+const js = (await build({ entryPoints: ['ui/js/app.js'], bundle: true, format: 'iife', write: false, target: 'es2020', legalComments: 'none' })).outputFiles[0].text;
+const css = readFileSync('ui/style.css', 'utf8');
+const icon = 'data:image/png;base64,' + readFileSync('ui/icon.png').toString('base64');
+let html = readFileSync('ui/index.html', 'utf8');
+
+html = html
+  .replace('<link rel="stylesheet" href="style.css">', `<link rel="icon" href="${icon}">\n  <style>\n${css}\n  </style>`)
+  .replace(/src="icon\.png"/g, `src="${icon}"`)
+  .replace('<script type="module" src="js/app.js"></script>', () => `<script>window.LRCSSYNC_WEB_VERSION = ${JSON.stringify(version)};</script>\n  <script>\n${js.replace(/<\/script/gi, '<\\/script')}\n  </script>`);
+
+const header = `<!--
+  LRCSSync ${version} (web build) - lyrics timing editor
+  Source: https://github.com/Smegoligga/LRCSSync  (built by scripts/build-web.mjs, do not edit by hand)
+
+  Everything is in this one file. To host it, serve it as index.html (e.g. at lyrics.smegolas.com).
+  It runs fully in the browser: audio is analysed locally and never uploaded. LRCLIB search uses
+  https://lrclib.net from the browser. Embedding lyrics into song files needs the desktop/Android app.
+
+  Accounts: the page has an empty <div id="account"> slot in the header. A site wrapper can fill it
+  (e.g. "Signed in as X / Log out") and/or set window.LRCSSYNC_USER = { name } before this script runs.
+-->
+`;
+mkdirSync(dirname(out), { recursive: true });
+writeFileSync(out, header + html);
+console.log(`wrote ${out} (${(Buffer.byteLength(header + html) / 1024).toFixed(0)} KB)`);

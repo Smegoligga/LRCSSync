@@ -632,7 +632,7 @@ async function save() {
 function openEmbedDialog() {
   if (!state.file) { toast('Open a song first'); return; }
   if (!state.doc.lines.length) { toast('Nothing to embed yet'); return; }
-  if (!P.isApp()) { toast('Embedding works in the app, not the browser'); return; }
+  if (!P.isApp()) { toast('Embedding into song files needs the desktop or Android app (see the GitHub releases)', 4500); return; }
   $('embedName').textContent = state.file.name;
   $('dlgEmbed').showModal();
 }
@@ -895,7 +895,9 @@ P.onFileDrop(async ({ paths, files }) => {
 window.addEventListener('beforeunload', e => { if (state.dirty) { e.preventDefault(); e.returnValue = ''; } });
 
 (async () => {
-  try { state.version = (await window.__TAURI__?.app?.getVersion?.()) || ''; } catch { state.version = ''; }
+  try { state.version = (await window.__TAURI__?.app?.getVersion?.()) || window.LRCSSYNC_WEB_VERSION || ''; } catch { state.version = window.LRCSSYNC_WEB_VERSION || ''; }
+  if (!P.isApp()) document.body.classList.add('web');
+  if (window.LRCSSYNC_USER && window.LRCSSYNC_USER.name && !$('account').textContent.trim()) $('account').textContent = window.LRCSSYNC_USER.name;
   state.version = state.version.replace(/\.0$/, '');
   if (P.isMobile()) document.body.classList.add('mobile');
   renderList();

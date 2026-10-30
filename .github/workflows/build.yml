@@ -63,6 +63,19 @@ jobs:
           else
             gh release create "$TAG" --prerelease --latest=false --title "LRCSSync $TAG" --notes-file "$NOTES" --verify-tag
           fi
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - name: Web build
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.v.outputs.tag }}
+          V: ${{ steps.v.outputs.version }}
+        run: |
+          npm ci
+          node scripts/build-web.mjs "LRCSSync_${V}_web.html"
+          gh release upload "$TAG" "LRCSSync_${V}_web.html" --clobber
       - name: Sync notes of older releases
         env:
           GH_TOKEN: ${{ github.token }}
