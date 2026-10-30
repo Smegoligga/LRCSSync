@@ -1,6 +1,7 @@
 // The timeline: ruler, waveform, frequency view with the voice band, voice activity and the lyric blocks.
 import { hzToRow } from './voice.js';
 import { nextTime } from './lrc.js';
+import { secColor } from './sections.js';
 
 const HOLD_MS = 420;
 const HOLD_ZOOM = 6;
@@ -323,7 +324,9 @@ export class Timeline {
     lines.forEach((ln, i) => {
       if (ln.t == null) return;
       const n = nextTime(lines, i);
-      const end = n != null ? n : Math.min(S.duration * 1000, ln.t + 4000);
+      let end = n != null ? n : Math.min(S.duration * 1000, ln.t + 4000);
+      // a lyric ends where an instrumental part starts
+      if (ln.text) for (const g of S.gaps || []) if (g.start > ln.t + 300 && g.start < end) { end = g.start; break; }
       out.push({ i, t: ln.t, end: Math.max(end, ln.t + 1) });
     });
     return out;
@@ -331,24 +334,65 @@ export class Timeline {
 
   drawLyrics(S) {
     const { ctx, W } = this, l = this.L.lyr;
+    // instrumental parts
+    for (const g of S.gaps || []) {
+      const x0 = this.x(g.start / 1000), x1 = this.x(g.end / 1000);
+      if (x1 < 0 || x0 > W) continue;
+      ctx.save();
+      ctx.beginPath(); ctx.rect(x0, l.y + 6, x1 - x0, l.h - 9); ctx.clip();
+      ctx.strokeStyle = 'rgba(255,255,255,0.06)';
+      for (let x = Math.floor(x0 / 8) * 8 - l.h; x < x1; x += 8) { ctx.beginPath(); ctx.moveTo(x, l.y + l.h); ctx.lineTo(x + l.h, l.y); ctx.stroke(); }
+      if (x1 - x0 > 90) {
+        ctx.fillStyle = C.muted; ctx.font = '11px system-ui, sans-serif'; ctx.textBaseline = 'middle';
+        ctx.fillText('instrumental', Math.max(x0, 0) + 8, l.y + l.h / 2 + 2);
+      }
+      ctx.restore();
+    }
+    // sections: colour strip on top of the lane, name in the voice lane
+    const bl = this.blocks(S);
+    const endOf = new Map(bl.map(b => [b.i, b.end]));
+    for (const sp of S.sections || []) {
+      let a = Infinity, b = -Infinity;
+      for (let i = sp.start; i < sp.end; i++) {
+        const t = S.doc.lines[i].t;
+        if (t == null) continue;
+        a = Math.min(a, t); b = Math.max(b, endOf.get(i) ?? t);
+      }
+      if (!isFinite(a)) continue;
+      const x0 = this.x(a / 1000), x1 = this.x(b / 1000);
+      if (x1 < 0 || x0 > W) continue;
+      const col = secColor(sp.group);
+      ctx.fillStyle = col;
+      ctx.fillRect(x0, l.y, Math.max(2, x1 - x0 - 1), 3);
+      const name = sp.of > 1 ? `${sp.label} ${sp.n}` : sp.label;
+      ctx.font = '600 10px system-ui, sans-serif';
+      const tw = ctx.measureText(name).width;
+      if (x1 - x0 > tw + 10) {
+        const lx = Math.max(x0, 2);
+        ctx.fillStyle = 'rgba(15,17,24,0.8)';
+        roundRect(ctx, lx, this.L.voice.y + 1, tw + 8, 13, 3); ctx.fill();
+        ctx.fillStyle = col; ctx.textBaseline = 'middle';
+        ctx.fillText(name, lx + 4, this.L.voice.y + 8);
+      }
+    }
     ctx.font = '12px system-ui, sans-serif';
     ctx.textBaseline = 'middle';
-    for (const b of this.blocks(S)) {
+    for (const b of bl) {
       const x0 = this.x(b.t / 1000), x1 = this.x(b.end / 1000);
       if (x1 < 0 || x0 > W) continue;
       const sel = b.i === S.sel, now = b.i === S.current;
       const w = Math.max(3, x1 - x0 - 1);
       ctx.fillStyle = sel ? C.blockSel : now ? C.blockNow : C.block;
-      roundRect(ctx, x0, l.y + 3, w, l.h - 6, 4); ctx.fill();
+      roundRect(ctx, x0, l.y + 6, w, l.h - 9, 4); ctx.fill();
       if (!sel) { ctx.strokeStyle = C.blockBorder; ctx.stroke(); }
       ctx.fillStyle = sel ? '#fff' : C.band;
-      ctx.fillRect(Math.round(x0), l.y + 3, 2, l.h - 6);
+      ctx.fillRect(Math.round(x0), l.y + 6, 2, l.h - 9);
       if (w > 14) {
         ctx.save();
         ctx.beginPath(); ctx.rect(x0 + 5, l.y, w - 8, l.h); ctx.clip();
         const text = S.doc.lines[b.i].text;
         ctx.fillStyle = text ? (sel ? C.blockSelText : C.blockText) : C.muted;
-        ctx.fillText(text || '(break)', Math.max(x0 + 6, 6), l.y + l.h / 2);
+        ctx.fillText(text || '(break)', Math.max(x0 + 6, 6), l.y + l.h / 2 + 2);
         ctx.restore();
       }
     }

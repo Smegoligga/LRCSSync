@@ -4,6 +4,18 @@ const TIME = /\[(\d{1,3}):(\d{1,2})(?:[.:](\d{1,3}))?]/g;
 const META = /^\s*\[([a-zA-Z#]+):([^\]]*)]\s*$/;
 const WORD_TIME = /<\d+:\d{1,2}(?:[.:]\d{1,3})?>/g;
 
+const META_KEYS = new Set(['ti', 'ar', 'al', 'au', 'by', 'length', 'offset', 're', 've', 'tool', '#', 'la', 'id']);
+const SECTION_WORDS = 'chorus|verse|pre-?chorus|post-?chorus|hook|bridge|intro|outro|refrain|interlude|break|breakdown|drop|instrumental|skit|part|coda|vamp|ad-?libs?';
+
+/** "[Chorus]", "[Verse 2: Artist]", "(Hook)", "Chorus:" -> "Chorus", "Verse 2", "Hook"; else null. */
+export function sectionHeader(t) {
+  const m = t.match(new RegExp(`^[\\[(]?\\s*((?:${SECTION_WORDS})(?:\\s*\\d+)?)\\s*(?::[^\\])]*)?[\\])]?\\s*:?$`, 'i'));
+  if (!m) return null;
+  if (!/^[\[(]/.test(t) && !/:$/.test(t) && !/^\w+(\s*\d+)?$/.test(t)) return null;
+  const name = m[1].replace(/\s+/g, ' ').trim();
+  return name.charAt(0).toUpperCase() + name.slice(1);
+}
+
 let nextId = 1;
 export function newLine(t, text) {
   return { id: nextId++, t: t == null ? null : Math.max(0, Math.round(t)), text: text ?? '' };
@@ -30,11 +42,18 @@ export function parse(text) {
   const lines = [];
   const raw = String(text ?? '').replace(/^\uFEFF/, '').split(/\r\n|\r|\n/);
   if (!isSynced(text ?? '')) {
+    let sec = false, label = null;
     for (const l of raw) {
       const m = l.match(META);
-      if (m && !/^\d/.test(m[1])) { meta[m[1].toLowerCase()] = m[2].trim(); continue; }
+      if (m && META_KEYS.has(m[1].toLowerCase())) { meta[m[1].toLowerCase()] = m[2].trim(); continue; }
       const t = l.trim();
-      if (t) lines.push(newLine(null, t));
+      if (!t) { if (lines.length) sec = true; continue; }
+      const h = sectionHeader(t);
+      if (h) { label = h; sec = true; continue; }
+      const ln = newLine(null, t);
+      if (sec || label) { ln.sec = true; if (label) ln.label = label; }
+      sec = false; label = null;
+      lines.push(ln);
     }
     return { meta, lines, synced: false };
   }
@@ -54,7 +73,7 @@ export function parse(text) {
       continue;
     }
     const mm = l.match(META);
-    if (mm) {
+    if (mm && META_KEYS.has(mm[1].toLowerCase())) {
       const key = mm[1].toLowerCase();
       if (key === 'offset') offset = parseInt(mm[2], 10) || 0;
       else meta[key] = mm[2].trim();

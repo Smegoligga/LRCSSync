@@ -137,3 +137,47 @@ export function load(key, def) {
 export function store(key, value) {
   try { localStorage.setItem('lrcssync.' + key, JSON.stringify(value)); } catch { /* ignore */ }
 }
+
+/** Audio bytes with `lyrics` written into the tags (Rust core). */
+export async function embedLyrics(audioBytes, lyrics) {
+  const invoke = T()?.core?.invoke;
+  if (!invoke) throw new Error('Embedding needs the app');
+  const text = new TextEncoder().encode(lyrics);
+  const body = new Uint8Array(4 + text.length + audioBytes.length);
+  new DataView(body.buffer).setUint32(0, text.length, true);
+  body.set(text, 4);
+  body.set(audioBytes, 4 + text.length);
+  const res = await invoke('embed_lyrics', body);
+  return new Uint8Array(res instanceof ArrayBuffer ? res : res.buffer ?? res);
+}
+
+/** Lyrics embedded in the audio's tags, or null. */
+export async function readEmbedded(audioBytes) {
+  const invoke = T()?.core?.invoke;
+  if (!invoke) return null;
+  try { return await invoke('read_lyrics', audioBytes); } catch { return null; }
+}
+
+/** Overwrites a file with bytes. */
+export async function writeBytes(path, bytes) {
+  await T().fs.writeFile(path, bytes);
+}
+
+/** Asks where to save a copy of the song. */
+export async function saveBytesAs(bytes, fileName, nearPath) {
+  if (!isApp()) {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([bytes]));
+    a.download = fileName;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    return fileName;
+  }
+  let defaultPath = fileName;
+  if (nearPath && !/^[a-z]+:\/\//i.test(nearPath)) defaultPath = nearPath.replace(/[^\\/]+$/, fileName);
+  const ext = (fileName.match(/\.([a-z0-9]+)$/i) || [])[1];
+  const path = await T().dialog.save({ defaultPath, filters: ext ? [{ name: 'Audio', extensions: [ext] }] : undefined });
+  if (!path) return null;
+  await T().fs.writeFile(path, bytes);
+  return path;
+}

@@ -13,11 +13,14 @@
     <div class="actions">
       <button id="btnOpen" title="Open song (Ctrl+O)">Open song</button>
       <button id="btnLyrics" title="Get lyrics">Lyrics</button>
+      <button id="btnEmbed" title="Write the lyrics into the song file">Embed</button>
       <button id="btnSave" class="primary" title="Save .lrc (Ctrl+S)">Save .lrc</button>
       <button id="btnMore" class="icon" title="More" aria-label="More">
         <svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg>
       </button>
       <div class="menu" id="menu" hidden>
+        <button data-act="embed">Embed lyrics in the song</button>
+        <button data-act="breaks">Add breaks for instrumental parts</button>
         <button data-act="copy">Copy LRC</button>
         <button data-act="openLrc">Open .lrc or .txt</button>
         <button data-act="settings">Settings</button>
@@ -36,7 +39,7 @@
     <button id="btnTap" class="tap" title="Set the selected line to now and go to the next (Enter)">Tap</button>
     <div class="group">
       <label class="sel" title="Playback speed"><span>Speed</span>
-        <select id="speed"><option value="1">1x</option><option value="0.75">0.75x</option><option value="0.5">0.5x</option></select>
+        <select id="speed"><option value="1">1x</option></select>
       </label>
       <button class="toggle" id="tSnap" title="Snap to vocal starts (G). Hold Alt while dragging to place freely">Snap</button>
       <button class="toggle" id="tRipple" title="Moving a line also moves every line after it (R)">Move following</button>
@@ -120,6 +123,15 @@
     <p class="muted small">Replacing your lyrics can be undone with Ctrl+Z.</p>
   </dialog>
 
+  <dialog id="dlgEmbed">
+    <form method="dialog" class="dlg-head"><h2>Embed lyrics</h2><button class="icon" aria-label="Close" value="close"><svg viewBox="0 0 24 24"><path d="M6.4 5 5 6.4 10.6 12 5 17.6 6.4 19l5.6-5.6 5.6 5.6 1.4-1.4-5.6-5.6L19 6.4 17.6 5 12 10.6z"/></svg></button></form>
+    <p>Writes the timed lyrics into the tags of <b id="embedName"></b>, so players like Poweramp show them without a separate .lrc file. Any lyrics already in the file are replaced. The audio itself isn't changed.</p>
+    <div class="row-btns">
+      <button class="primary" id="embedOverwrite">Write into this song</button>
+      <button id="embedCopy">Save a copy with lyrics</button>
+    </div>
+  </dialog>
+
   <dialog id="dlgSettings">
     <form method="dialog" class="dlg-head"><h2>Settings</h2><button class="icon" aria-label="Close" value="close"><svg viewBox="0 0 24 24"><path d="M6.4 5 5 6.4 10.6 12 5 17.6 6.4 19l5.6-5.6 5.6 5.6 1.4-1.4-5.6-5.6L19 6.4 17.6 5 12 10.6z"/></svg></button></form>
     <label class="field"><span>Tap delay compensation</span>
@@ -129,6 +141,10 @@
     <label class="field"><span>Snap distance</span>
       <span class="inline"><input type="number" id="setSnapPx" min="2" max="40" step="1"> px</span>
       <small>How close to a vocal start a line has to be to snap to it.</small>
+    </label>
+    <label class="field"><span>Instrumental part length</span>
+      <span class="inline"><input type="number" id="setGapSec" min="1" max="30" step="0.5"> seconds</span>
+      <small>Gaps in the singing at least this long are marked as instrumental.</small>
     </label>
     <div class="field"><span>Voice band</span>
       <button id="resetBand">Reset to 150 Hz - 4 kHz</button>
@@ -145,8 +161,10 @@
       <tr><td>Left / Right</td><td>Nudge 50 ms (Shift 10 ms, Ctrl 100 ms)</td></tr>
       <tr><td>, / .</td><td>Jump back / forward 2 s</td></tr>
       <tr><td>P</td><td>Play from the selected line</td></tr>
+      <tr><td>[ / ] / \</td><td>Slower / faster / normal speed</td></tr>
       <tr><td>E or F2</td><td>Edit the selected line's text</td></tr>
       <tr><td>I / Del</td><td>Insert a line below / delete the line</td></tr>
+      <tr><td>B</td><td>Add breaks for instrumental parts</td></tr>
       <tr><td>G / R / L</td><td>Snap / Move following / Loop line</td></tr>
       <tr><td>+ / - / 0</td><td>Zoom in / out / fit</td></tr>
       <tr><td>Ctrl+Z / Ctrl+Shift+Z</td><td>Undo / redo</td></tr>

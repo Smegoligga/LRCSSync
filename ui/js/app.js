@@ -7,6 +7,7 @@ import { History } from './history.js';
 import { Timeline } from './timeline.js';
 import * as P from './platform.js';
 import { Player } from './player.js';
+import { findSections, instrumentalGaps, audioFeatures, findRepeat, mapLines, secColor } from './sections.js';
 
 const SR = 16000;
 const $ = id => document.getElementById(id);
@@ -20,7 +21,8 @@ const state = {
   doc: { meta: {}, lines: [] },
   sel: -1, current: -1,
   snap: P.load('snap', true), ripple: P.load('ripple', false), loop: false, follow: P.load('follow', true),
-  tapComp: P.load('tapComp', 0), snapPx: P.load('snapPx', 10),
+  tapComp: P.load('tapComp', 0), snapPx: P.load('snapPx', 10), gapSec: P.load('gapSec', 4),
+  sections: [], gaps: [], feat: null,
   dirty: false, version: '',
 };
 window.lrcs = state; // handy for debugging
@@ -97,13 +99,14 @@ async function openAudio(file) {
 
     busy('Reading audio...');
     const { samples, rate } = await decodeMono(file.bytes);
-    state.file = { name: file.name, path: file.path };
+    const hadSong = !!state.file;
+    state.file = { name: file.name, path: file.path, bytes: file.bytes };
     state.tags = readTags(file.bytes, file.name);
     state.pcm = rate === SR ? samples : null;
     state.peaks = computePeaks(samples, rate);
     state.duration = samples.length / rate;
     state.time = 0;
-    state.spec = null; state.voice = null;
+    state.spec = null; state.voice = null; state.feat = null; state.gaps = [];
     $('fileName').textContent = [state.tags.artist, state.tags.title].filter(Boolean).join(' - ') || file.name;
     $('empty').hidden = true;
     if (!P.load('hintSeen', false)) {
@@ -127,10 +130,15 @@ async function openAudio(file) {
     updateVoice();
 
     const side = await P.readSidecar(file.path);
+    const embedded = side ? null : await P.readEmbedded(file.bytes);
     if (side) {
       replaceDoc(parse(side), { quiet: true });
       toast('Loaded the .lrc next to this song');
-    } else if (!state.doc.lines.length) {
+    } else if (embedded) {
+      replaceDoc(parse(embedded), { quiet: true });
+      toast('Loaded the lyrics embedded in this song');
+    } else {
+      if (hadSong && state.doc.lines.length) replaceDoc({ meta: {}, lines: [], synced: false }, { quiet: true });
       toast('Now get lyrics: Lyrics > Search, paste or open a file');
     }
     if (!state.doc.meta.length) state.doc.meta.length = clock(state.duration).replace(/\.\d+$/, '');
@@ -140,6 +148,7 @@ async function openAudio(file) {
     toast("Couldn't open this file. " + (e && e.message ? e.message : ''), 5000);
   } finally {
     busy(null);
+    updateClock();
     timeline.request();
   }
 }
@@ -190,7 +199,12 @@ let bandRaf = 0;
 function updateVoice() {
   if (!state.spec) return;
   state.voice = analyzeBand(state.spec, state.band.lo, state.band.hi);
+  updateGaps();
   timeline.request();
+}
+
+function updateGaps() {
+  state.gaps = state.voice ? instrumentalGaps(state.voice.regions, state.duration * 1000, state.gapSec * 1000) : [];
 }
 
 function setBand(lo, hi, final) {
@@ -377,6 +391,107 @@ function rowHtml(ln, i) {
   return `<div class="${cls.join(' ')}" data-i="${i}"><button class="t" tabindex="-1">${stamp(ln.t)}</button><div class="txt">${text}</div></div>`;
 }
 
+
+function secLines(sp) { const out = []; for (let i = sp.start; i < sp.end; i++) out.push(i); return out; }
+function timedCount(sp) { return secLines(sp).filter(i => state.doc.lines[i].t != null).length; }
+function siblings(sp) { return state.sections.filter(x => x.group === sp.group && x !== sp); }
+
+function secHtml(k) {
+  const sp = state.sections[k];
+  const timed = timedCount(sp), size = sp.end - sp.start;
+  const sib = siblings(sp);
+  const btns = [];
+  if (sib.length && timed) btns.push(`<button data-sec-act="copy" data-k="${k}" title="Use this section's timing for the other ${sib.length === 1 ? 'repeat' : 'repeats'}, found in the audio">Copy timing to ${sib.length === 1 ? 'the other one' : 'the other ' + sib.length}</button>`);
+  if (sib.length && timed < size && sib.some(x => timedCount(x))) btns.push(`<button data-sec-act="find" data-k="${k}" title="Find this repeat in the audio and time it like the other one">Find in audio</button>`);
+  if (timed) btns.push(`<button data-sec-act="play" data-k="${k}">Play</button>`);
+  return `<div class="sec-head" style="--sec:${secColor(sp.group)}"><span class="sec-name">${escapeHtml(sp.label)}</span>${sp.of > 1 ? `<span class="muted">${sp.n} of ${sp.of}</span>` : ''}<span class="sec-btns">${btns.join('')}</span></div>`;
+}
+
+/** Times the `dsts` sections like `src`: anchored on their own first line if it's timed, otherwise found in the audio. */
+function copySectionTiming(src, dsts) {
+  const L = state.doc.lines;
+  const idx = secLines(src);
+  const timed = idx.filter(i => L[i].t != null);
+  if (!timed.length) { toast('Time at least one line of this section first'); return; }
+  const tFirst = Math.min(...timed.map(i => L[i].t));
+  const lastIdx = timed.reduce((a, i) => (L[i].t > L[a].t ? i : a), timed[0]);
+  const after = nextTime(L, lastIdx);
+  const srcEnd = Math.min(after ?? Infinity, L[lastIdx].t + 6000);
+  const rel = idx.map(i => (L[i].t == null ? null : L[i].t - tFirst));
+  if (!state.feat && state.spec) state.feat = audioFeatures(state.spec);
+  history.push(state.doc);
+  let placed = 0;
+  const weak = [];
+  for (const dst of dsts.slice().sort((a, b) => a.start - b.start)) {
+    const di = secLines(dst);
+    const map = mapLines(idx.map(i => L[i].text), di.map(i => L[i].text));
+    let anchor = null;
+    if (L[di[0]].t != null && rel[map[0]] != null && dsts.length > 1) anchor = L[di[0]].t - rel[map[0]];
+    if (anchor == null) {
+      if (!state.feat) continue;
+      const len = srcEnd - tFirst;
+      let prev = null, next = null;
+      L.forEach((l, i) => {
+        if (l.t == null) return;
+        if (i < dst.start && (prev == null || l.t > prev)) prev = l.t;
+        if (i >= dst.end && (next == null || l.t < next)) next = l.t;
+      });
+      const lo = (prev ?? -200) + 200;
+      let hi = next != null ? next - len * 0.5 : state.duration * 1000 - len;
+      if (hi < lo) hi = lo;
+      const r = findRepeat(state.feat, tFirst, srcEnd, lo, hi);
+      if (!r) continue;
+      anchor = r.start;
+      if (r.score < 0.75) weak.push(`${dst.label} ${dst.n}`);
+    }
+    di.forEach((li, j) => { const r = rel[map[j]]; if (r != null) L[li].t = Math.max(0, Math.round(anchor + r)); });
+    placed++;
+  }
+  if (!placed) { history.undo.pop(); toast("Couldn't place it. Tap the first line of the other section and try again.", 4500); return; }
+  setDirty(true);
+  renderList();
+  timeline.request();
+  toast(weak.length ? `Timed ${placed}. Check ${weak.join(', ')}: the audio match was weak.` : `Timed ${placed} section${placed > 1 ? 's' : ''} from ${src.label} ${src.n}`, 4500);
+}
+
+function sectionAction(act, k) {
+  const sp = state.sections[k];
+  if (!sp) return;
+  if (act === 'copy') copySectionTiming(sp, siblings(sp));
+  else if (act === 'find') {
+    const src = siblings(sp).sort((a, b) => timedCount(b) - timedCount(a))[0];
+    copySectionTiming(src, [sp]);
+  } else if (act === 'play') {
+    const t = Math.min(...secLines(sp).map(i => state.doc.lines[i].t).filter(t => t != null));
+    seek(Math.max(0, t / 1000 - 0.5));
+    audio.play().catch(() => {});
+  }
+}
+
+/** Puts an empty (clearing) line at the start of each instrumental gap, so the last lyric doesn't stay up. */
+function addBreaks() {
+  if (!state.gaps.length) { toast('No instrumental parts found. Fit the voice band to the singer first.', 4000); return; }
+  const L = state.doc.lines;
+  history.push(state.doc);
+  let added = 0;
+  for (const g of state.gaps) {
+    if (g.start <= 0) continue;
+    const at = Math.round(g.start + 300);
+    const cur = lineAt(L, at);
+    if (cur < 0 || L[cur].text === '') continue;
+    if (L.some(l => l.t != null && l.t > g.start && l.t < g.end - 300)) continue;
+    let pos = -1;
+    L.forEach((l, i) => { if (l.t != null && l.t <= at) pos = i; });
+    L.splice(pos + 1, 0, newLine(at, ''));
+    added++;
+  }
+  if (!added) { history.undo.pop(); toast('Every instrumental part already has a break'); return; }
+  setDirty(true);
+  renderList();
+  timeline.request();
+  toast(`Added ${added} break${added > 1 ? 's' : ''}. The status clears during instrumental parts now.`, 4000);
+}
+
 function escapeHtml(s) {
   return s.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 }
@@ -386,8 +501,11 @@ function renderList() {
   if (!lines.length) {
     list.innerHTML = `<div class="list-empty">${state.duration ? 'No lyrics yet. Use <b>Lyrics</b> to search LRCLIB, paste text or open a file.' : ''}</div>`;
   } else {
-    list.innerHTML = lines.map(rowHtml).join('');
+    state.sections = findSections(lines);
+    const starts = new Map(state.sections.map((sp, k) => [sp.start, k]));
+    list.innerHTML = lines.map((ln, i) => (starts.has(i) ? secHtml(starts.get(i)) : '') + rowHtml(ln, i)).join('');
   }
+  if (!lines.length) state.sections = [];
   const untimed = lines.filter(l => l.t == null).length;
   $('btnLyrics').classList.toggle('attention', !!state.duration && !lines.length);
   list.dataset.untimed = untimed;
@@ -436,6 +554,8 @@ function updateCurrent() {
 }
 
 list.addEventListener('click', e => {
+  const sb = e.target.closest('[data-sec-act]');
+  if (sb) { sectionAction(sb.dataset.secAct, +sb.dataset.k); return; }
   const row = e.target.closest('.row');
   if (!row || e.target.closest('input')) return;
   const i = +row.dataset.i;
@@ -505,6 +625,49 @@ async function save() {
     toast(untimed ? `Saved. ${untimed} line(s) without a time were put at the end.` : 'Saved ' + P.baseName(where), 3500);
   } catch (e) {
     toast("Couldn't save: " + (e.message || e), 5000);
+  }
+}
+
+// ---------------- embedding ----------------
+function openEmbedDialog() {
+  if (!state.file) { toast('Open a song first'); return; }
+  if (!state.doc.lines.length) { toast('Nothing to embed yet'); return; }
+  if (!P.isApp()) { toast('Embedding works in the app, not the browser'); return; }
+  $('embedName').textContent = state.file.name;
+  $('dlgEmbed').showModal();
+}
+
+async function embed(mode) {
+  $('dlgEmbed').close();
+  busy('Embedding lyrics...');
+  try {
+    const out = await P.embedLyrics(state.file.bytes, lrcText());
+    let where = null;
+    if (mode === 'overwrite' && state.file.path) {
+      try {
+        await P.writeBytes(state.file.path, out);
+        where = state.file.name;
+      } catch (e) {
+        console.warn('overwrite failed', e);
+        busy(null);
+        toast("Couldn't write to the original file, so save a copy instead", 4000);
+      }
+    }
+    if (!where) {
+      busy(null);
+      const ext = (state.file.name.match(/\.[a-z0-9]+$/i) || [''])[0];
+      where = await P.saveBytesAs(out, P.stripExt(state.file.name) + ' (lyrics)' + ext, state.file.path);
+      if (!where) return;
+      where = P.baseName(where);
+    } else {
+      state.file.bytes = out;
+    }
+    setDirty(false);
+    toast('Lyrics embedded in ' + where, 3500);
+  } catch (e) {
+    toast("Couldn't embed: " + (e.message || e), 5000);
+  } finally {
+    busy(null);
   }
 }
 
@@ -607,12 +770,27 @@ const toggleRipple = toggle('tRipple', 'ripple');
 const toggleLoop = toggle('tLoop', 'loop');
 toggle('tFollow', 'follow');
 
+const SPEEDS = [0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95, 1, 1.05, 1.1, 1.15, 1.2, 1.25, 1.3, 1.4, 1.5, 1.6, 1.75, 2, 2.25, 2.5, 3, 3.5, 4];
+$('speed').innerHTML = SPEEDS.map(v => `<option value="${v}"${v === 1 ? ' selected' : ''}>${v}x</option>`).join('');
+function setSpeed(v) {
+  $('speed').value = String(v);
+  audio.playbackRate = v;
+  toast(`Speed ${v}x`, 900);
+}
+function stepSpeed(dir) {
+  const i = SPEEDS.indexOf(+$('speed').value);
+  const n = SPEEDS[Math.max(0, Math.min(SPEEDS.length - 1, (i < 0 ? SPEEDS.indexOf(1) : i) + dir))];
+  setSpeed(n);
+}
 $('speed').addEventListener('change', () => { audio.playbackRate = +$('speed').value; });
 $('btnPlay').onclick = togglePlay;
 $('btnTap').onclick = () => tap();
 $('btnOpen').onclick = $('btnOpen2').onclick = async () => openAudio(await P.pickAudio().catch(e => { toast(e.message || String(e)); return null; }));
 $('btnLyrics').onclick = () => openLyricsDialog();
 $('btnSave').onclick = save;
+$('btnEmbed').onclick = openEmbedDialog;
+$('embedOverwrite').onclick = () => embed('overwrite');
+$('embedCopy').onclick = () => embed('copy');
 $('zIn').onclick = () => timeline.zoomAt(1.6, timeline.x(state.time));
 $('zOut').onclick = () => timeline.zoomAt(1 / 1.6, timeline.x(state.time));
 $('zFit').onclick = () => timeline.fit();
@@ -634,17 +812,23 @@ menu.addEventListener('click', async e => {
   if (act === 'copy') {
     if (!state.doc.lines.length) return toast('Nothing to copy yet');
     toast((await P.copyText(lrcText())) ? 'Copied LRC' : "Couldn't copy");
+  } else if (act === 'breaks') {
+    addBreaks();
+  } else if (act === 'embed') {
+    openEmbedDialog();
   } else if (act === 'openLrc') {
     $('openLrcFile').click();
   } else if (act === 'settings') {
     $('setTapComp').value = state.tapComp;
     $('setSnapPx').value = state.snapPx;
+    $('setGapSec').value = state.gapSec;
     $('dlgSettings').showModal();
   } else if (act === 'keys') $('dlgKeys').showModal();
   else if (act === 'about') { $('aboutVersion').textContent = state.version ? 'v' + state.version : ''; $('dlgAbout').showModal(); }
 });
 $('setTapComp').onchange = e => { state.tapComp = Math.max(0, Math.min(500, +e.target.value || 0)); P.store('tapComp', state.tapComp); };
 $('setSnapPx').onchange = e => { state.snapPx = Math.max(2, Math.min(40, +e.target.value || 10)); P.store('snapPx', state.snapPx); };
+$('setGapSec').onchange = e => { state.gapSec = Math.max(1, Math.min(30, +e.target.value || 4)); P.store('gapSec', state.gapSec); updateGaps(); timeline.request(); };
 $('resetBand').onclick = () => { setBand(DEFAULT_BAND.lo, DEFAULT_BAND.hi, true); toast('Voice band reset'); };
 
 // ---------------- keyboard ----------------
@@ -677,6 +861,10 @@ document.addEventListener('keydown', e => {
   else if (k === '-' || k === '_') $('zOut').click();
   else if (k === '0') timeline.fit();
   else if (k === 'Home') seek(0);
+  else if (k === 'b' || k === 'B') addBreaks();
+  else if (k === '[') stepSpeed(-1);
+  else if (k === ']') stepSpeed(1);
+  else if (k === '\\') setSpeed(1);
   else handled = false;
   if (handled) e.preventDefault();
 });
@@ -716,4 +904,4 @@ window.addEventListener('beforeunload', e => { if (state.dirty) { e.preventDefau
 })();
 
 // test hooks (used by the browser checks)
-window.lrcsApi = { audio, openAudio, replaceDoc, parse, tap, nudge, select, seek, setBand, lrcText, undo, redo, timeline };
+window.lrcsApi = { audio, openAudio, copySectionTiming, addBreaks, sectionAction, replaceDoc, parse, tap, nudge, select, seek, setBand, lrcText, undo, redo, timeline };
