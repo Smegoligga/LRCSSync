@@ -1,0 +1,178 @@
+name: Build
+
+# Every push to main builds Windows, macOS, Linux and Android and puts them all in one
+# pre-release named after the version in src-tauri/tauri.conf.json (0.1.0 -> v0.1).
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - name: UI tests
+        run: node --test tests/*.test.mjs
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Core tests
+        run: cargo test --release --manifest-path core/Cargo.toml
+
+  prepare:
+    needs: test
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      tag: ${{ steps.v.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v5
+      - id: v
+        name: Read version
+        run: |
+          V=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          SHORT=$(echo "$V" | sed -E 's/\.0$//')
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          echo "short=$SHORT" >> "$GITHUB_OUTPUT"
+          echo "tag=v$SHORT" >> "$GITHUB_OUTPUT"
+      - name: Create or update the pre-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.v.outputs.tag }}
+          SHORT: ${{ steps.v.outputs.short }}
+        run: |
+          NOTES="release-notes/$SHORT.md"
+          [ -f "$NOTES" ] || NOTES=release-notes/default.md
+          git tag -f "$TAG" "$GITHUB_SHA"
+          git push -f origin "refs/tags/$TAG"
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            gh release edit "$TAG" --prerelease --title "LRCSSync $TAG" --notes-file "$NOTES"
+            gh release view "$TAG" --json assets -q '.assets[].name' | while read -r a; do
+              [ -n "$a" ] && gh release delete-asset "$TAG" "$a" -y
+            done
+          else
+            gh release create "$TAG" --prerelease --latest=false --title "LRCSSync $TAG" --notes-file "$NOTES" --verify-tag
+          fi
+      - name: Sync notes of older releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for f in release-notes/*.md; do
+            v=$(basename "$f" .md)
+            [ "$v" = default ] && continue
+            gh release view "v$v" > /dev/null 2>&1 && gh release edit "v$v" --notes-file "$f" || true
+          done
+
+  desktop:
+    needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            bundles: nsis
+            args: ""
+          - os: macos-latest
+            bundles: dmg
+            args: "--target universal-apple-darwin"
+          - os: ubuntu-22.04
+            bundles: deb,appimage
+            args: ""
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.os == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - name: Linux packages
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+      - run: npm ci
+      - name: Build
+        run: npx tauri build --bundles ${{ matrix.bundles }} ${{ matrix.args }}
+      - name: Upload to the release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+          V: ${{ needs.prepare.outputs.version }}
+        run: |
+          mkdir -p out
+          find src-tauri/target -path '*/bundle/*' -type f \( -name '*.exe' -o -name '*.dmg' -o -name '*.deb' -o -name '*.AppImage' \) -exec cp {} out/ \;
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            cp src-tauri/target/release/lrcssync.exe "out/LRCSSync_${V}_x64-portable.exe"
+          fi
+          ls -la out
+          gh release upload "$TAG" out/* --clobber
+
+  android:
+    needs: prepare
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - name: Android SDK and NDK
+        run: |
+          SDK="${ANDROID_HOME:-$ANDROID_SDK_ROOT}"
+          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
+          if [ -n "$ANDROID_NDK_LATEST_HOME" ] && [ -d "$ANDROID_NDK_LATEST_HOME" ]; then
+            NDK="$ANDROID_NDK_LATEST_HOME"
+          else
+            yes | "$SDK/cmdline-tools/latest/bin/sdkmanager" "ndk;27.2.12479018" > /dev/null
+            NDK="$SDK/ndk/27.2.12479018"
+          fi
+          echo "NDK_HOME=$NDK" >> "$GITHUB_ENV"
+          echo "SDK $SDK, NDK $NDK"
+      - run: npm ci
+      - name: Generate the Android project
+        run: |
+          npx tauri android init --ci
+          cp -r src-tauri/icons/android/* src-tauri/gen/android/app/src/main/res/
+      - name: Build
+        run: npx tauri android build --apk --ci --target aarch64 armv7 x86_64
+      - name: Sign and upload
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+          V: ${{ needs.prepare.outputs.version }}
+        run: |
+          APK=$(find src-tauri/gen/android/app/build/outputs/apk -name '*release*.apk' | head -1)
+          echo "Built $APK"
+          BT=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
+          "$BT/zipalign" -f -p 4 "$APK" aligned.apk
+          OUT="LRCSSync_${V}_android.apk"
+          "$BT/apksigner" sign --ks keystore/lrcssync.jks --ks-pass pass:lrcssync --key-pass pass:lrcssync --ks-key-alias lrcssync --out "$OUT" aligned.apk
+          "$BT/apksigner" verify "$OUT"
+          gh release upload "$TAG" "$OUT" --clobber

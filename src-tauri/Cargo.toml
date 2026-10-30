@@ -1,0 +1,28 @@
+[package]
+name = "lrcssync"
+version = "0.1.0"
+description = "Sync .lrc lyrics easier, faster and better"
+edition = "2021"
+license = "GPL-2.0-only"
+repository = "https://github.com/Smegoligga/LRCSSync"
+
+[lib]
+name = "lrcssync_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+tauri-plugin-fs = "2"
+tauri-plugin-http = "2"
+lrcs-core = { path = "../core" }
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true

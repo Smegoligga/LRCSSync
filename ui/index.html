@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>LRCSSync</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="top">
+    <div class="brand"><img src="icon.png" alt=""><span>LRCSSync</span></div>
+    <div class="file" id="fileName">No song open</div>
+    <div class="actions">
+      <button id="btnOpen" title="Open song (Ctrl+O)">Open song</button>
+      <button id="btnLyrics" title="Get lyrics">Lyrics</button>
+      <button id="btnSave" class="primary" title="Save .lrc (Ctrl+S)">Save .lrc</button>
+      <button id="btnMore" class="icon" title="More" aria-label="More">
+        <svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg>
+      </button>
+      <div class="menu" id="menu" hidden>
+        <button data-act="copy">Copy LRC</button>
+        <button data-act="openLrc">Open .lrc or .txt</button>
+        <button data-act="settings">Settings</button>
+        <button data-act="keys">Keyboard shortcuts</button>
+        <button data-act="about">About</button>
+      </div>
+    </div>
+  </header>
+
+  <section class="transport">
+    <button id="btnPlay" class="icon big" title="Play / pause (Space)" aria-label="Play">
+      <svg class="i-play" viewBox="0 0 24 24"><path d="M7 4.5v15l13-7.5z"/></svg>
+      <svg class="i-pause" viewBox="0 0 24 24"><path d="M6 4h4.5v16H6zM13.5 4H18v16h-4.5z"/></svg>
+    </button>
+    <span class="clock" id="clock">0:00.00 / 0:00.00</span>
+    <button id="btnTap" class="tap" title="Set the selected line to now and go to the next (Enter)">Tap</button>
+    <div class="group">
+      <label class="sel" title="Playback speed"><span>Speed</span>
+        <select id="speed"><option value="1">1x</option><option value="0.75">0.75x</option><option value="0.5">0.5x</option></select>
+      </label>
+      <button class="toggle" id="tSnap" title="Snap to vocal starts (G). Hold Alt while dragging to place freely">Snap</button>
+      <button class="toggle" id="tRipple" title="Moving a line also moves every line after it (R)">Move following</button>
+      <button class="toggle" id="tLoop" title="Loop the selected line (L)">Loop line</button>
+      <button class="toggle" id="tFollow" title="Keep the playhead in view">Follow</button>
+    </div>
+    <div class="group zoom">
+      <button class="icon" id="zOut" title="Zoom out (-)" aria-label="Zoom out"><svg viewBox="0 0 24 24"><path d="M5 11h14v2H5z"/></svg></button>
+      <button id="zFit" title="Show the whole song">Fit</button>
+      <button class="icon" id="zIn" title="Zoom in (+)" aria-label="Zoom in"><svg viewBox="0 0 24 24"><path d="M11 5h2v6h6v2h-6v6h-2v-6H5v-2h6z"/></svg></button>
+    </div>
+  </section>
+
+  <section class="timeline-wrap">
+    <canvas id="timeline"></canvas>
+    <div class="empty" id="empty">
+      <p class="big">Open a song to start</p>
+      <p>Or drop an audio file here.</p>
+      <button id="btnOpen2" class="primary">Open song</button>
+    </div>
+    <div class="hint" id="hint" hidden>Drag a line to move it. Press and hold to zoom in. Drag the green edges to fit the voice.</div>
+  </section>
+
+  <section class="editbar" id="editbar">
+    <span class="sel-label" id="selLabel">No line selected</span>
+    <div class="nudges">
+      <button data-nudge="-100">-100</button>
+      <button data-nudge="-50">-50</button>
+      <button data-nudge="-10">-10</button>
+      <button data-nudge="10">+10</button>
+      <button data-nudge="50">+50</button>
+      <button data-nudge="100">+100</button>
+    </div>
+    <div class="tools">
+      <button id="bSetHere" title="Set the selected line to the playhead (S)">Set here</button>
+      <button id="bPlayLine" title="Play from the selected line (P)">Play line</button>
+      <button id="bClear" title="Remove the time from the selected line">Clear time</button>
+      <button id="bInsert" title="Insert a line below (I)">Insert</button>
+      <button id="bDelete" title="Delete the selected line (Del)">Delete</button>
+      <button class="icon" id="bUndo" title="Undo (Ctrl+Z)" aria-label="Undo"><svg viewBox="0 0 24 24"><path d="M12.5 8c-2.65 0-5.05 1-6.9 2.6L2 7v9h9l-3.62-3.62A7.95 7.95 0 0 1 20.1 16l2.37-.78A10.48 10.48 0 0 0 12.5 8z"/></svg></button>
+      <button class="icon" id="bRedo" title="Redo (Ctrl+Shift+Z)" aria-label="Redo"><svg viewBox="0 0 24 24"><path d="M11.5 8c2.65 0 5.05 1 6.9 2.6L22 7v9h-9l3.62-3.62A7.95 7.95 0 0 0 3.9 16l-2.37-.78A10.48 10.48 0 0 1 11.5 8z"/></svg></button>
+    </div>
+  </section>
+
+  <main class="list" id="list"></main>
+
+  <div class="toast" id="toast" role="status"></div>
+  <div class="busy" id="busy" hidden><div class="spinner"></div><span id="busyText">Loading...</span></div>
+
+  <dialog id="dlgLyrics">
+    <form method="dialog" class="dlg-head"><h2>Lyrics</h2><button class="icon" aria-label="Close" value="close"><svg viewBox="0 0 24 24"><path d="M6.4 5 5 6.4 10.6 12 5 17.6 6.4 19l5.6-5.6 5.6 5.6 1.4-1.4-5.6-5.6L19 6.4 17.6 5 12 10.6z"/></svg></button></form>
+    <div class="tabs">
+      <button class="tab active" data-tab="search">Search LRCLIB</button>
+      <button class="tab" data-tab="paste">Paste</button>
+      <button class="tab" data-tab="file">File</button>
+    </div>
+    <div class="tabpane" data-pane="search">
+      <form class="search" id="searchForm">
+        <input id="qTitle" placeholder="Song" autocomplete="off">
+        <input id="qArtist" placeholder="Artist" autocomplete="off">
+        <button class="primary" type="submit">Search</button>
+      </form>
+      <div class="status" id="searchStatus"></div>
+      <div class="results" id="results"></div>
+      <div class="preview" id="preview" hidden>
+        <pre id="previewText"></pre>
+        <div class="row-btns">
+          <button class="primary" id="useSynced">Use synced lyrics</button>
+          <button id="usePlain">Use text only and time it myself</button>
+        </div>
+      </div>
+    </div>
+    <div class="tabpane" data-pane="paste" hidden>
+      <textarea id="pasteText" placeholder="Paste plain lyrics (one line per line) or LRC"></textarea>
+      <div class="row-btns"><button class="primary" id="usePaste">Use these lyrics</button></div>
+    </div>
+    <div class="tabpane" data-pane="file" hidden>
+      <p class="muted">Open a .lrc file (timed) or a .txt file (plain lyrics to time yourself).</p>
+      <div class="row-btns"><button class="primary" id="openLrcFile">Open file</button></div>
+    </div>
+    <p class="muted small">Replacing your lyrics can be undone with Ctrl+Z.</p>
+  </dialog>
+
+  <dialog id="dlgSettings">
+    <form method="dialog" class="dlg-head"><h2>Settings</h2><button class="icon" aria-label="Close" value="close"><svg viewBox="0 0 24 24"><path d="M6.4 5 5 6.4 10.6 12 5 17.6 6.4 19l5.6-5.6 5.6 5.6 1.4-1.4-5.6-5.6L19 6.4 17.6 5 12 10.6z"/></svg></button></form>
+    <label class="field"><span>Tap delay compensation</span>
+      <span class="inline"><input type="number" id="setTapComp" min="0" max="500" step="10"> ms</span>
+      <small>Subtracted from every tap, since most people tap a little late.</small>
+    </label>
+    <label class="field"><span>Snap distance</span>
+      <span class="inline"><input type="number" id="setSnapPx" min="2" max="40" step="1"> px</span>
+      <small>How close to a vocal start a line has to be to snap to it.</small>
+    </label>
+    <div class="field"><span>Voice band</span>
+      <button id="resetBand">Reset to 150 Hz - 4 kHz</button>
+    </div>
+  </dialog>
+
+  <dialog id="dlgKeys">
+    <form method="dialog" class="dlg-head"><h2>Keyboard shortcuts</h2><button class="icon" aria-label="Close" value="close"><svg viewBox="0 0 24 24"><path d="M6.4 5 5 6.4 10.6 12 5 17.6 6.4 19l5.6-5.6 5.6 5.6 1.4-1.4-5.6-5.6L19 6.4 17.6 5 12 10.6z"/></svg></button></form>
+    <table class="keys">
+      <tr><td>Space</td><td>Play / pause</td></tr>
+      <tr><td>Enter or T</td><td>Tap: time the selected line and go to the next</td></tr>
+      <tr><td>S</td><td>Set the selected line to the playhead</td></tr>
+      <tr><td>Up / Down</td><td>Select the previous / next line</td></tr>
+      <tr><td>Left / Right</td><td>Nudge 50 ms (Shift 10 ms, Ctrl 100 ms)</td></tr>
+      <tr><td>, / .</td><td>Jump back / forward 2 s</td></tr>
+      <tr><td>P</td><td>Play from the selected line</td></tr>
+      <tr><td>E or F2</td><td>Edit the selected line's text</td></tr>
+      <tr><td>I / Del</td><td>Insert a line below / delete the line</td></tr>
+      <tr><td>G / R / L</td><td>Snap / Move following / Loop line</td></tr>
+      <tr><td>+ / - / 0</td><td>Zoom in / out / fit</td></tr>
+      <tr><td>Ctrl+Z / Ctrl+Shift+Z</td><td>Undo / redo</td></tr>
+      <tr><td>Ctrl+O / Ctrl+S</td><td>Open song / save .lrc</td></tr>
+      <tr><td>Hold on the timeline</td><td>Zoom in while held (drag to fine-tune, release to zoom back)</td></tr>
+      <tr><td>Alt while dragging</td><td>Don't snap</td></tr>
+      <tr><td>Ctrl + scroll / pinch</td><td>Zoom</td></tr>
+    </table>
+  </dialog>
+
+  <dialog id="dlgAbout">
+    <form method="dialog" class="dlg-head"><h2>LRCSSync <span id="aboutVersion"></span></h2><button class="icon" aria-label="Close" value="close"><svg viewBox="0 0 24 24"><path d="M6.4 5 5 6.4 10.6 12 5 17.6 6.4 19l5.6-5.6 5.6 5.6 1.4-1.4-5.6-5.6L19 6.4 17.6 5 12 10.6z"/></svg></button></form>
+    <p>Sync .lrc lyrics easier, faster and better.</p>
+    <p class="muted">Lyrics search by <a href="https://lrclib.net" target="_blank" rel="noopener">LRCLIB</a>. Source code at github.com/Smegoligga/LRCSSync.</p>
+  </dialog>
+
+  <audio id="audio" preload="auto"></audio>
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
