@@ -2175,6 +2175,7 @@ name = "lrcssync"
 version = "0.3.0"
 dependencies = [
  "lrcs-core",
+ "serde_json",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
