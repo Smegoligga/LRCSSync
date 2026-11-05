@@ -7,6 +7,12 @@ import { History } from './history.js';
 import { Timeline } from './timeline.js';
 import * as P from './platform.js';
 import { Player } from './player.js';
+import { alignLines, wordsToLines } from './align.js';
+import { fitTiming, applyFit } from './fit.js';
+import { transcribe, MODELS } from './asr.js';
+import { identify } from './identify.js';
+import { searchGenius, fetchGeniusLyrics, openGeniusWindow } from './genius.js';
+import { rating, uncensor } from './censor.js';
 import { findSections, instrumentalGaps, audioFeatures, findRepeat, mapLines, secColor } from './sections.js';
 
 const SR = 16000;
@@ -23,6 +29,7 @@ const state = {
   snap: P.load('snap', true), ripple: P.load('ripple', false), loop: false, follow: P.load('follow', true),
   tapComp: P.load('tapComp', 0), snapPx: P.load('snapPx', 10), gapSec: P.load('gapSec', 4),
   sections: [], gaps: [], feat: null,
+  model: P.load('model', 'base'), lang: P.load('lang', ''), asrCache: null,
   dirty: false, version: '',
 };
 window.lrcs = state; // handy for debugging
@@ -47,10 +54,16 @@ function toast(msg, ms = 2600) {
   toastTimer = setTimeout(() => t.classList.remove('show'), ms);
 }
 
-function busy(text) {
+let cancelRequested = null;
+function busy(text, { progress = null, cancel = null } = {}) {
   $('busy').hidden = !text;
   if (text) $('busyText').textContent = text;
+  $('busyBar').hidden = progress == null;
+  if (progress != null) $('busyFill').style.width = Math.round(Math.max(0, Math.min(1, progress)) * 100) + '%';
+  $('busyCancel').hidden = !cancel;
+  cancelRequested = cancel;
 }
+$('busyCancel').onclick = () => { if (cancelRequested) cancelRequested(); };
 
 function setDirty(v = true) {
   state.dirty = v;
@@ -280,6 +293,7 @@ function setLineTime(i, ms, { ripple = state.ripple, clampOrder = true, orig } =
     if (nb.next != null) ms = Math.min(ms, nb.next - 10);
   }
   ln.t = Math.max(0, ms);
+  delete ln.conf;
 }
 
 let dragOrig = null;
@@ -331,6 +345,7 @@ function tap({ advance = true } = {}) {
   history.push(state.doc);
   const ln = state.doc.lines[state.sel];
   ln.t = Math.max(0, Math.round(ms));
+  delete ln.conf;
   setDirty(true);
   if (advance && state.sel < state.doc.lines.length - 1) state.sel++;
   renderList();
@@ -385,6 +400,7 @@ const list = $('list');
 function rowHtml(ln, i) {
   const cls = ['row'];
   if (ln.t == null) cls.push('untimed');
+  if (ln.conf != null && ln.conf < 0.5 && ln.text) cls.push('check');
   if (i === state.sel) cls.push('sel');
   if (i === state.current) cls.push('now');
   const text = ln.text ? escapeHtml(ln.text) : '<span class="muted">(break)</span>';
@@ -628,6 +644,160 @@ async function save() {
   }
 }
 
+// ---------------- automatic syncing ----------------
+/** Shifts/stretches timed lyrics to this recording when that clearly fits better (extended intros etc.). */
+function autoFit({ hintSec = 0, quiet = false } = {}) {
+  if (!state.voice || !state.doc.lines.some(l => l.t != null)) return false;
+  const f = fitTiming(state.doc.lines, state.voice.level, state.spec.hop * 1000, { durationHintMs: Math.abs(hintSec) * 1000 });
+  if (!f.better) { if (!quiet && hintSec) toast('The timing already fits this recording', 2500); return false; }
+  history.push(state.doc);
+  for (const l of state.doc.lines) l.t = applyFit(l.t, f);
+  setDirty(true);
+  renderList();
+  timeline.request();
+  const sh = (f.offset / 1000).toFixed(1);
+  const st = f.scale !== 1 ? ` and stretched ${((f.scale - 1) * 100).toFixed(1)}%` : '';
+  toast(`Moved the lyrics ${f.offset >= 0 ? '+' : ''}${sh} s${st} to fit this recording. Ctrl+Z to undo.`, 5000);
+  return true;
+}
+
+/** Nudges line starts onto the nearest start of singing. */
+function snapAll(radius = 220) {
+  if (!state.voice) return 0;
+  let moved = 0, last = -Infinity;
+  for (const l of state.doc.lines) {
+    if (l.t == null) continue;
+    if (l.text) {
+      const s = nearestSnap(state.voice.starts, l.t, radius, radius * 0.7) ?? nearestSnap(state.voice.snaps, l.t, radius * 0.6, radius * 0.4);
+      if (s != null && s > last + 50 && s !== l.t) { l.t = s; moved++; }
+    }
+    if (l.t <= last) l.t = last + 50;
+    last = l.t;
+  }
+  return moved;
+}
+
+/** Transcribes the song with progress and a cancel button. Cached per song and model. */
+async function listen({ onChunk } = {}) {
+  const key = `${state.file?.name}|${state.duration}|${state.model}|${state.lang}`;
+  if (state.asrCache && state.asrCache.key === key) return state.asrCache.words;
+  const ctl = { aborted: false };
+  busy('Getting the speech model ready...', { progress: 0, cancel: () => { ctl.aborted = true; busy('Stopping...'); } });
+  const started = Date.now();
+  try {
+    const words = await transcribe(state.pcm, {
+      model: state.model, language: state.lang || null, signal: ctl,
+      onProgress: p => {
+        if (ctl.aborted) return;
+        if (p.phase === 'download' && p.total) busy(`Downloading the speech model (first time only)... ${Math.round(p.done / 1e6)} / ${Math.round(p.total / 1e6)} MB`, { progress: p.done / p.total, cancel: cancelRequested });
+        else if (p.phase === 'transcribe') {
+          const el = (Date.now() - started) / 1000, left = p.done ? Math.round(el / p.done * (p.total - p.done)) : null;
+          busy(`Listening to the song... ${Math.round(p.done / p.total * 100)}%${left != null && p.done < p.total ? `, about ${left} s left` : ''}`, { progress: p.done / p.total, cancel: cancelRequested });
+        }
+      },
+      onChunk: (w, frac) => onChunk && onChunk(w, frac, ctl),
+    });
+    if (ctl.aborted && !ctl.keep) return null;
+    if (!ctl.aborted) state.asrCache = { key, words };
+    return words;
+  } catch (e) {
+    console.error(e);
+    toast("Speech recognition didn't work: " + (e.message || e) + '. It needs an internet connection the first time.', 7000);
+    return null;
+  } finally {
+    busy(null);
+  }
+}
+
+/** One click: times every line. Fits already-timed lyrics, otherwise listens and lines the lyrics up with the words. */
+async function syncAll() {
+  if (!state.duration) { toast('Open a song first'); return; }
+  const L = state.doc.lines;
+  const sung = L.filter(l => l.text);
+  if (!sung.length) { writeFromAudio(); return; }
+  const timed = sung.filter(l => l.t != null).length;
+  if (timed >= sung.length * 0.6) {
+    const fitted = autoFit({ quiet: true });
+    history.push(state.doc);
+    const moved = snapAll();
+    const breaks = addBreaksQuiet();
+    if (!moved && !breaks) history.undo.pop();
+    setDirty(true); renderList(); timeline.request();
+    toast(`${fitted ? 'Fitted to this recording. ' : ''}Lined up ${moved} line${moved === 1 ? '' : 's'} with the singing${breaks ? `, added ${breaks} break${breaks > 1 ? 's' : ''}` : ''}.`, 5000);
+    return;
+  }
+  const words = await listen();
+  if (!words) return;
+  if (words.length < 5) { toast("Couldn't hear enough words. Fit the voice band to the singer, or try a bigger speech model in Settings.", 6000); return; }
+  const res = alignLines(L, words);
+  history.push(state.doc);
+  L.forEach((l, i) => { if (res[i].t != null) { l.t = res[i].t; l.conf = res[i].conf; } });
+  snapAll(180);
+  addBreaksQuiet();
+  setDirty(true); renderList(); timeline.request();
+  const check = L.filter(l => l.text && l.conf != null && l.conf < 0.5).length;
+  toast(`Synced ${L.filter(l => l.t != null).length} lines.${check ? ` ${check} need a check (times in orange with a ?).` : ''}`, 6000);
+}
+
+/** Writes lyrics from the audio. Looks the song up while listening and uses the real lyrics when sure. */
+async function writeFromAudio() {
+  if (!state.duration) { toast('Open a song first'); return; }
+  dlg.open && dlg.close();
+  let found = null, lookup = null;
+  const words = await listen({
+    onChunk: (w, frac, ctl) => {
+      const heardSec = w.length ? w[w.length - 1].end / 1000 : 0;
+      if (!lookup && (w.length >= 25 || heardSec > 60 || frac >= 1)) {
+        lookup = identify(w, state.tags, state.duration).then(r => {
+          found = r;
+          if (r && r.synced) { ctl.keep = true; ctl.aborted = true; } // real synced lyrics: no need to keep listening
+        }).catch(() => {});
+      }
+    },
+  });
+  if (lookup) await lookup;
+  if (found) {
+    const d = found.synced ? parse(found.synced) : parse(found.plain);
+    d.meta = { ...d.meta, ti: found.title, ar: found.artist, al: found.album };
+    replaceDoc(d, { quiet: true });
+    if (found.synced) {
+      autoFit({ quiet: true });
+      toast(`Recognised "${found.title}" by ${found.artist} and used its synced lyrics from ${found.source}.`, 6000);
+    } else if (words && words.length) {
+      const res = alignLines(state.doc.lines, words);
+      state.doc.lines.forEach((l, i) => { if (res[i].t != null) { l.t = res[i].t; l.conf = res[i].conf; } });
+      snapAll(180);
+      renderList(); timeline.request();
+      toast(`Recognised "${found.title}" by ${found.artist}, used its lyrics from ${found.source} and timed them from the audio.`, 6000);
+    }
+    return;
+  }
+  if (!words) return;
+  if (!words.length) { toast("Couldn't hear any words. Try a bigger speech model in Settings.", 5000); return; }
+  const lines = wordsToLines(words).map(l => { const ln = newLine(l.t, l.text); ln.conf = 0.4; return ln; });
+  replaceDoc({ meta: { ti: state.tags.title, ar: state.tags.artist }, lines, synced: true }, { quiet: true });
+  snapAll(150);
+  addBreaksQuiet();
+  renderList(); timeline.request();
+  toast(`Wrote ${lines.length} lines from the audio. It's a draft: check the words before saving.`, 6000);
+}
+
+function addBreaksQuiet() {
+  const before = state.doc.lines.length;
+  const L = state.doc.lines;
+  for (const g of state.gaps) {
+    if (g.start <= 0) continue;
+    const at = Math.round(g.start + 300);
+    const cur = lineAt(L, at);
+    if (cur < 0 || L[cur].text === '') continue;
+    if (L.some(l => l.t != null && l.t > g.start && l.t < g.end - 300)) continue;
+    let pos = -1;
+    L.forEach((l, i) => { if (l.t != null && l.t <= at) pos = i; });
+    L.splice(pos + 1, 0, newLine(at, ''));
+  }
+  return state.doc.lines.length - before;
+}
+
 // ---------------- embedding ----------------
 function openEmbedDialog() {
   if (!state.file) { toast('Open a song first'); return; }
@@ -690,50 +860,137 @@ for (const tab of document.querySelectorAll('.tab')) {
   });
 }
 
+const yearOf = r => r.year ? `<span class="year">${r.year}</span>` : '';
+const keyOf = (t, a) => (String(t || '') + '|' + String(a || '').split(/,|&| feat| ft\.?/i)[0]).toLowerCase().replace(/[^\p{L}\p{N}|]+/gu, '');
+
 $('searchForm').addEventListener('submit', async e => {
   e.preventDefault();
   const title = $('qTitle').value.trim(), artist = $('qArtist').value.trim();
   if (!title && !artist) return;
-  $('searchStatus').textContent = 'Searching...';
+  $('searchStatus').textContent = 'Searching LRCLIB and Genius...';
   $('results').innerHTML = '';
   $('preview').hidden = true;
-  try {
-    const res = await searchLrclib({ title, artist }, state.duration);
-    $('searchStatus').textContent = res.length ? `${res.length} result${res.length > 1 ? 's' : ''}` : 'Nothing found. Try fewer words, or paste lyrics instead.';
-    $('results').innerHTML = res.slice(0, 30).map((r, i) => {
-      const kind = r.syncedLyrics ? '<span class="badge synced">Synced</span>' : r.plainLyrics ? '<span class="badge">Text only</span>' : '<span class="badge">Instrumental</span>';
-      let len = r.duration ? clock(r.duration).replace(/\.\d+$/, '') : '';
-      if (r.duration && state.duration) {
-        const d = Math.round(r.duration - state.duration);
-        len += Math.abs(d) <= 2 ? ' <span class="good">matches your song</span>' : ` <span class="warn">${d > 0 ? '+' : ''}${d}s vs your song</span>`;
-      }
-      return `<button class="result" data-i="${i}"><b>${escapeHtml(r.trackName || '')}</b> <span class="muted">${escapeHtml(r.artistName || '')}${r.albumName ? ' &middot; ' + escapeHtml(r.albumName) : ''}</span><span class="meta">${kind} ${len}</span></button>`;
-    }).join('');
-    $('results').onclick = ev => {
-      const b = ev.target.closest('.result');
-      if (!b) return;
-      for (const x of $('results').querySelectorAll('.result')) x.classList.toggle('active', x === b);
-      picked = res[+b.dataset.i];
-      const text = picked.syncedLyrics || picked.plainLyrics || '(instrumental)';
-      $('previewText').textContent = text;
-      $('useSynced').hidden = !picked.syncedLyrics;
-      $('usePlain').hidden = !picked.plainLyrics && !picked.syncedLyrics;
-      $('usePlain').textContent = picked.syncedLyrics ? 'Use text only and time it myself' : 'Use and time it myself';
-      $('preview').hidden = false;
-      $('preview').scrollIntoView({ block: 'nearest' });
-    };
-  } catch (err) {
-    const m = String(err && err.message || err);
-    $('searchStatus').textContent = /fetch|network|connect|dns|timed? ?out/i.test(m) ? "Couldn't reach LRCLIB. Check your internet connection." : m;
+  const [lr, gr] = await Promise.allSettled([
+    searchLrclib({ title, artist }, state.duration),
+    searchGenius([title, artist].filter(Boolean).join(' ')),
+  ]);
+  const res = [];
+  const genius = gr.status === 'fulfilled' ? gr.value : [];
+  const years = new Map(genius.map(g => [keyOf(g.title, g.artist), g.year]));
+  if (lr.status === 'fulfilled') for (const r of lr.value) {
+    const text = r.syncedLyrics || r.plainLyrics || '';
+    res.push({ source: 'LRCLIB', title: r.trackName, artist: r.artistName, album: r.albumName, duration: r.duration, synced: r.syncedLyrics, plain: r.plainLyrics,
+      year: years.get(keyOf(r.trackName, r.artistName)) || null, rating: rating(text), instrumental: !text });
   }
+  for (const g of genius) res.push({ source: 'Genius', title: g.title, artist: g.artist, album: g.album, year: g.year, url: g.url, synced: null, plain: null, rating: null });
+  const errs = [];
+  if (lr.status === 'rejected') errs.push(friendlyNet(lr.reason, 'LRCLIB'));
+  if (gr.status === 'rejected' && !gr.reason?.botCheck) errs.push(friendlyNet(gr.reason, 'Genius'));
+  if (gr.status === 'rejected' && gr.reason?.botCheck) res.push({ source: 'Genius', title: 'Search on Genius', artist: 'Genius wants a quick check first', url: gr.reason.url, botCheck: true });
+  $('searchStatus').textContent = (res.length ? `${res.length} result${res.length > 1 ? 's' : ''}` : 'Nothing found. Try fewer words, or paste lyrics instead.') + (errs.length ? ' ' + errs.join(' ') : '');
+  $('results').innerHTML = res.slice(0, 40).map((r, i) => {
+    const kind = r.synced ? '<span class="badge synced">Synced</span>' : r.plain ? '<span class="badge">Text only</span>' : r.source === 'Genius' ? '<span class="badge">Text</span>' : '<span class="badge">Instrumental</span>';
+    const rate = r.rating === 'explicit' ? '<span class="badge explicit">Explicit</span>' : r.rating === 'censored' ? '<span class="badge censored">Censored</span>' : '';
+    let len = r.duration ? clock(r.duration).replace(/\.\d+$/, '') : '';
+    if (r.duration && state.duration) {
+      const d = Math.round(r.duration - state.duration);
+      len += Math.abs(d) <= 2 ? ' <span class="good">matches your song</span>' : ` <span class="warn">${d > 0 ? '+' : ''}${d}s vs your song</span>`;
+    }
+    const src = `<span class="src ${r.source.toLowerCase()}">${r.source.toUpperCase()}</span>`;
+    return `<button class="result" data-i="${i}">${src}<b>${escapeHtml(r.title || '')}</b>${yearOf(r)} <span class="muted">${escapeHtml(r.artist || '')}${r.album ? ' &middot; ' + escapeHtml(r.album) : ''}</span><span class="meta">${kind}${rate} ${len}</span></button>`;
+  }).join('');
+  $('results').onclick = async ev => {
+    const b = ev.target.closest('.result');
+    if (!b) return;
+    for (const x of $('results').querySelectorAll('.result')) x.classList.toggle('active', x === b);
+    picked = res[+b.dataset.i];
+    picked.all = res;
+    if (picked.source === 'Genius' && !picked.plain) {
+      $('previewText').textContent = 'Getting lyrics from Genius...';
+      $('preview').hidden = false;
+      try {
+        picked.plain = picked.botCheck ? await geniusViaWindow(picked.url) : await fetchGeniusLyrics(picked.url);
+      } catch (err) {
+        picked.plain = err.botCheck ? await geniusViaWindow(err.url) : null;
+        if (!picked.plain && !err.botCheck) { $('previewText').textContent = err.message || String(err); return; }
+      }
+      if (!picked.plain) { $('previewText').textContent = 'Copy the lyrics from the Genius page, then use Paste > Paste from clipboard.'; $('useSynced').hidden = $('usePlain').hidden = $('useUncensor').hidden = true; return; }
+      picked.rating = rating(picked.plain);
+    }
+    showPreview();
+  };
 });
+
+function friendlyNet(err, name) {
+  const m = String(err && err.message || err);
+  return /fetch|network|connect|dns|timed? ?out|load failed/i.test(m) ? `Couldn't reach ${name}.` : `${name}: ${m}`;
+}
+
+async function geniusViaWindow(url) {
+  toast(P.isApp() && !P.isMobile()
+    ? 'Pass the check in the Genius window. The lyrics come back here by themselves. If it keeps failing, turn off your VPN.'
+    : 'Genius opened in your browser. Pass the check (turn off your VPN if it keeps failing), copy the lyrics, then paste them here.', 7000);
+  return openGeniusWindow(url);
+}
+
+function showPreview() {
+  const text = picked.synced || picked.plain || '(instrumental)';
+  $('previewText').textContent = text;
+  $('useSynced').hidden = !picked.synced;
+  $('usePlain').hidden = !picked.plain && !picked.synced;
+  $('usePlain').textContent = picked.synced ? 'Use text only and time it myself' : 'Use and time it myself';
+  $('useUncensor').hidden = picked.rating !== 'censored';
+  $('previewNote').textContent = picked.rating === 'censored' ? 'These lyrics are censored. Uncensor looks for an uncensored version of the same song and puts the original words back, keeping these timings.' : '';
+  $('preview').hidden = false;
+  $('preview').scrollIntoView({ block: 'nearest' });
+}
+
+$('useUncensor').onclick = async () => {
+  if (!picked) return;
+  $('useUncensor').disabled = true;
+  try {
+    const source = await findUncensored(picked);
+    if (!source) { toast("Couldn't find an uncensored version of this song", 4000); return; }
+    const d = parse(picked.synced || picked.plain);
+    const n = uncensor(d.lines, source);
+    if (!n) { toast("The uncensored version didn't match these lyrics closely enough", 4000); return; }
+    const txt = picked.synced ? format({ meta: {}, lines: d.lines }).replace(/^\[re:[^\]]*]\n/m, '') : d.lines.map(l => l.text).join('\n');
+    if (picked.synced) picked.synced = txt; else picked.plain = txt;
+    picked.rating = rating(txt);
+    showPreview();
+    toast(`Put back ${n} word${n > 1 ? 's' : ''}`, 2500);
+  } finally {
+    $('useUncensor').disabled = false;
+  }
+};
+
+async function findUncensored(p) {
+  const same = r => r !== p && keyOf(r.title, r.artist) === keyOf(p.title, p.artist);
+  for (const r of p.all || []) if (same(r) && (r.synced || r.plain) && rating(r.synced || r.plain) === 'explicit') return r.plain || r.synced.replace(/\[[^\]]*]/g, '');
+  try {
+    const hits = await searchGenius(`${p.title} ${p.artist || ''}`);
+    for (const h of hits.slice(0, 3)) {
+      if (keyOf(h.title, h.artist) !== keyOf(p.title, p.artist) && hits.length > 1) continue;
+      let text = null;
+      try { text = await fetchGeniusLyrics(h.url); } catch (err) { if (err.botCheck) text = await geniusViaWindow(err.url); }
+      if (text && rating(text) !== 'censored') return text;
+    }
+  } catch (err) { if (err.botCheck) return geniusViaWindow(err.url); }
+  return null;
+}
+
+$('pasteClip').onclick = async () => {
+  try { $('pasteText').value = await navigator.clipboard.readText(); }
+  catch { $('pasteText').focus(); toast('Long-press or Ctrl+V in the box to paste', 2500); }
+};
 
 function useResult(synced) {
   if (!picked) return;
-  const d = synced ? parse(picked.syncedLyrics) : parse(picked.plainLyrics || stripTimes(picked.syncedLyrics || ''));
-  d.meta = { ...d.meta, ti: picked.trackName, ar: picked.artistName, al: picked.albumName };
+  const d = synced ? parse(picked.synced) : parse(picked.plain || stripTimes(picked.synced || ''));
+  d.meta = { ...d.meta, ti: picked.title, ar: picked.artist, al: picked.album };
   replaceDoc(d);
   dlg.close();
+  if (synced) autoFit({ hintSec: picked.duration ? picked.duration - state.duration : 0 });
 }
 function stripTimes(t) { return t.replace(/^\s*(\[\d{1,3}:\d{1,2}(?:[.:]\d{1,3})?])+/gm, ''); }
 $('useSynced').onclick = () => useResult(true);
@@ -788,6 +1045,11 @@ $('btnTap').onclick = () => tap();
 $('btnOpen').onclick = $('btnOpen2').onclick = async () => openAudio(await P.pickAudio().catch(e => { toast(e.message || String(e)); return null; }));
 $('btnLyrics').onclick = () => openLyricsDialog();
 $('btnSave').onclick = save;
+$('btnSyncAll').onclick = () => syncAll();
+$('writeAudio').onclick = () => writeFromAudio();
+$('setModel').innerHTML = Object.entries(MODELS).map(([k, m]) => `<option value="${k}">${m.label}</option>`).join('');
+$('setModel').onchange = e => { state.model = e.target.value; P.store('model', state.model); };
+$('setLang').onchange = e => { state.lang = e.target.value; P.store('lang', state.lang); };
 $('btnEmbed').onclick = openEmbedDialog;
 $('embedOverwrite').onclick = () => embed('overwrite');
 $('embedCopy').onclick = () => embed('copy');
@@ -812,6 +1074,10 @@ menu.addEventListener('click', async e => {
   if (act === 'copy') {
     if (!state.doc.lines.length) return toast('Nothing to copy yet');
     toast((await P.copyText(lrcText())) ? 'Copied LRC' : "Couldn't copy");
+  } else if (act === 'write') {
+    writeFromAudio();
+  } else if (act === 'fit') {
+    autoFit({ hintSec: 1 });
   } else if (act === 'breaks') {
     addBreaks();
   } else if (act === 'embed') {
@@ -822,6 +1088,8 @@ menu.addEventListener('click', async e => {
     $('setTapComp').value = state.tapComp;
     $('setSnapPx').value = state.snapPx;
     $('setGapSec').value = state.gapSec;
+    $('setModel').value = state.model;
+    $('setLang').value = state.lang;
     $('dlgSettings').showModal();
   } else if (act === 'keys') $('dlgKeys').showModal();
   else if (act === 'about') { $('aboutVersion').textContent = state.version ? 'v' + state.version : ''; $('dlgAbout').showModal(); }
@@ -862,6 +1130,7 @@ document.addEventListener('keydown', e => {
   else if (k === '0') timeline.fit();
   else if (k === 'Home') seek(0);
   else if (k === 'b' || k === 'B') addBreaks();
+  else if (k === 'a' || k === 'A') syncAll();
   else if (k === '[') stepSpeed(-1);
   else if (k === ']') stepSpeed(1);
   else if (k === '\\') setSpeed(1);
@@ -906,4 +1175,4 @@ window.addEventListener('beforeunload', e => { if (state.dirty) { e.preventDefau
 })();
 
 // test hooks (used by the browser checks)
-window.lrcsApi = { audio, openAudio, copySectionTiming, addBreaks, sectionAction, replaceDoc, parse, tap, nudge, select, seek, setBand, lrcText, undo, redo, timeline };
+window.lrcsApi = { audio, openAudio, syncAll, writeFromAudio, autoFit, snapAll, listen, copySectionTiming, addBreaks, sectionAction, replaceDoc, parse, tap, nudge, select, seek, setBand, lrcText, undo, redo, timeline };

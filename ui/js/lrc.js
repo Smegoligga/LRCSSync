@@ -16,6 +16,13 @@ export function sectionHeader(t) {
   return name.charAt(0).toUpperCase() + name.slice(1);
 }
 
+/** Lines that come along when copying from Genius and similar sites but aren't lyrics. */
+export function isJunk(t) {
+  return /^\d+\s*Contributors?\b/i.test(t) || /^(You might also like|Embed|See .* Live|Get tickets as low as.*)$/i.test(t)
+    || /^\d*\s*Embed$/i.test(t) || /^Translations?\b/i.test(t) || /^.{1,120}\sLyrics$/.test(t) && /Lyrics$/.test(t) && !/\s(the|my|your)\sLyrics$/i.test(t)
+    || /^Read More\s*$/i.test(t);
+}
+
 let nextId = 1;
 export function newLine(t, text) {
   return { id: nextId++, t: t == null ? null : Math.max(0, Math.round(t)), text: text ?? '' };
@@ -48,8 +55,10 @@ export function parse(text) {
       if (m && META_KEYS.has(m[1].toLowerCase())) { meta[m[1].toLowerCase()] = m[2].trim(); continue; }
       const t = l.trim();
       if (!t) { if (lines.length) sec = true; continue; }
+      if (isJunk(t)) continue;
       const h = sectionHeader(t);
       if (h) { label = h; sec = true; continue; }
+      if (/^\[[^\]]*\]$/.test(t)) { sec = true; continue; }
       const ln = newLine(null, t);
       if (sec || label) { ln.sec = true; if (label) ln.label = label; }
       sec = false; label = null;
@@ -69,6 +78,7 @@ export function parse(text) {
     }
     if (stamps.length) {
       const body = rest.replace(WORD_TIME, '').replace(/\s+/g, ' ').trim();
+      if (/^\[[^\]]*\]$/.test(body) || isJunk(body)) continue; // [Chorus] etc. aren't lyrics
       for (const s of stamps) lines.push(newLine(s, body));
       continue;
     }

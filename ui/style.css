@@ -154,6 +154,23 @@ body:not(.has-sel) .editbar #bDelete { opacity: .45; pointer-events: none; }
 .row.sel { background: rgba(139,123,255,.18); border-left-color: var(--accent); }
 .row input.edit { width: 100%; padding: 4px 8px; }
 
+button.sync { border-color: var(--voice); color: var(--voice); font-weight: 600; }
+button.sync:hover { background: rgba(94,230,193,.12); }
+.busy-box { display: grid; gap: 10px; justify-items: center; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 18px 22px; min-width: min(360px, 90vw); }
+.busy-row { display: flex; align-items: center; gap: 12px; }
+.bar { width: 100%; height: 6px; background: #0c0e14; border-radius: 4px; overflow: hidden; }
+.bar[hidden] { display: none; }
+.bar > div { height: 100%; width: 0; background: var(--voice); transition: width .2s; }
+#busyCancel[hidden] { display: none; }
+.row.check .t { color: var(--warn); }
+.row.check .t::after { content: ' ?'; }
+.src { display: inline-block; font-size: 10px; font-weight: 700; letter-spacing: .4px; padding: 1px 6px; border-radius: 4px; margin-right: 6px; vertical-align: 1px; }
+.src.lrclib { background: rgba(139,123,255,.2); color: #b9adff; }
+.src.genius { background: rgba(255,255,100,.16); color: #f4f27a; }
+.badge.explicit { background: rgba(255,107,125,.16); color: var(--danger); }
+.badge.censored { background: rgba(255,180,84,.16); color: var(--warn); }
+.year { color: var(--muted); font-size: 12px; margin-left: 4px; }
+
 /* Section headers */
 .sec-head {
   display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
@@ -227,6 +244,7 @@ a { color: var(--accent-hi); }
   .top { padding: 6px 8px; gap: 8px; flex-wrap: wrap; }
   .brand span { display: none; }
   #btnEmbed { display: none; }
+  #btnLyrics, #btnSyncAll { padding: 6px 9px; }
   .file { order: 3; flex-basis: 100%; font-size: 12px; }
   .actions { margin-left: auto; }
   .transport { padding: 6px 8px; gap: 6px; }

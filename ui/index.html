@@ -14,6 +14,7 @@
     <div class="actions">
       <button id="btnOpen" title="Open song (Ctrl+O)">Open song</button>
       <button id="btnLyrics" title="Get lyrics">Lyrics</button>
+      <button id="btnSyncAll" class="sync" title="Time every line automatically from the audio">Sync all</button>
       <button id="btnEmbed" title="Write the lyrics into the song file">Embed</button>
       <button id="btnSave" class="primary" title="Save .lrc (Ctrl+S)">Save .lrc</button>
       <button id="btnMore" class="icon" title="More" aria-label="More">
@@ -21,6 +22,8 @@
       </button>
       <div class="menu" id="menu" hidden>
         <button data-act="embed">Embed lyrics in the song</button>
+        <button data-act="write">Write lyrics from the audio</button>
+        <button data-act="fit">Fit timing to this recording</button>
         <button data-act="breaks">Add breaks for instrumental parts</button>
         <button data-act="copy">Copy LRC</button>
         <button data-act="openLrc">Open .lrc or .txt</button>
@@ -88,14 +91,21 @@
   <main class="list" id="list"></main>
 
   <div class="toast" id="toast" role="status"></div>
-  <div class="busy" id="busy" hidden><div class="spinner"></div><span id="busyText">Loading...</span></div>
+  <div class="busy" id="busy" hidden>
+    <div class="busy-box">
+      <div class="busy-row"><div class="spinner"></div><span id="busyText">Loading...</span></div>
+      <div class="bar" id="busyBar" hidden><div id="busyFill"></div></div>
+      <button id="busyCancel" hidden>Cancel</button>
+    </div>
+  </div>
 
   <dialog id="dlgLyrics">
     <form method="dialog" class="dlg-head"><h2>Lyrics</h2><button class="icon" aria-label="Close" value="close"><svg viewBox="0 0 24 24"><path d="M6.4 5 5 6.4 10.6 12 5 17.6 6.4 19l5.6-5.6 5.6 5.6 1.4-1.4-5.6-5.6L19 6.4 17.6 5 12 10.6z"/></svg></button></form>
     <div class="tabs">
-      <button class="tab active" data-tab="search">Search LRCLIB</button>
+      <button class="tab active" data-tab="search">Search</button>
       <button class="tab" data-tab="paste">Paste</button>
       <button class="tab" data-tab="file">File</button>
+      <button class="tab" data-tab="audio">From audio</button>
     </div>
     <div class="tabpane" data-pane="search">
       <form class="search" id="searchForm">
@@ -110,16 +120,23 @@
         <div class="row-btns">
           <button class="primary" id="useSynced">Use synced lyrics</button>
           <button id="usePlain">Use text only and time it myself</button>
+          <button id="useUncensor" hidden title="Find an uncensored version of this song and put the original words back, keeping these timings">Uncensor</button>
         </div>
+        <p class="muted small" id="previewNote"></p>
       </div>
     </div>
     <div class="tabpane" data-pane="paste" hidden>
-      <textarea id="pasteText" placeholder="Paste plain lyrics (one line per line) or LRC"></textarea>
-      <div class="row-btns"><button class="primary" id="usePaste">Use these lyrics</button></div>
+      <textarea id="pasteText" placeholder="Paste plain lyrics (one line per line) or LRC. Copied from Genius? Headers like [Chorus] and [Verse 1: Artist] are used as sections, not lyrics."></textarea>
+      <div class="row-btns"><button id="pasteClip">Paste from clipboard</button><button class="primary" id="usePaste">Use these lyrics</button></div>
     </div>
     <div class="tabpane" data-pane="file" hidden>
       <p class="muted">Open a .lrc file (timed) or a .txt file (plain lyrics to time yourself).</p>
       <div class="row-btns"><button class="primary" id="openLrcFile">Open file</button></div>
+    </div>
+    <div class="tabpane" data-pane="audio" hidden>
+      <p>Listens to the song and writes the lyrics with their timings. While it listens it also looks the song up, and if it's sure which song it is, it uses the real lyrics instead.</p>
+      <p class="muted small">Runs on this device. The first time, it downloads a speech model (see Settings). Check the words afterwards: it mishears some, especially over loud music or fast rap.</p>
+      <div class="row-btns"><button class="primary" id="writeAudio">Write lyrics from the audio</button></div>
     </div>
     <p class="muted small">Replacing your lyrics can be undone with Ctrl+Z.</p>
   </dialog>
@@ -147,6 +164,15 @@
       <span class="inline"><input type="number" id="setGapSec" min="1" max="30" step="0.5"> seconds</span>
       <small>Gaps in the singing at least this long are marked as instrumental.</small>
     </label>
+    <label class="field"><span>Speech model</span>
+      <select id="setModel"></select>
+      <small>Used by Sync all and Write lyrics. Downloaded once, then works offline. Bigger is more accurate but slower.</small>
+    </label>
+    <label class="field"><span>Song language</span>
+      <select id="setLang">
+        <option value="">Detect automatically</option><option value="en">English</option><option value="es">Spanish</option><option value="fr">French</option><option value="de">German</option><option value="it">Italian</option><option value="pt">Portuguese</option><option value="nl">Dutch</option><option value="pl">Polish</option><option value="ru">Russian</option><option value="ja">Japanese</option><option value="ko">Korean</option><option value="zh">Chinese</option>
+      </select>
+    </label>
     <div class="field"><span>Voice band</span>
       <button id="resetBand">Reset to 150 Hz - 4 kHz</button>
     </div>
@@ -165,6 +191,7 @@
       <tr><td>[ / ] / \</td><td>Slower / faster / normal speed</td></tr>
       <tr><td>E or F2</td><td>Edit the selected line's text</td></tr>
       <tr><td>I / Del</td><td>Insert a line below / delete the line</td></tr>
+      <tr><td>A</td><td>Sync all</td></tr>
       <tr><td>B</td><td>Add breaks for instrumental parts</td></tr>
       <tr><td>G / R / L</td><td>Snap / Move following / Loop line</td></tr>
       <tr><td>+ / - / 0</td><td>Zoom in / out / fit</td></tr>

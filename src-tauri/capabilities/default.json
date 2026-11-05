@@ -5,6 +5,15 @@
   "windows": ["main"],
   "permissions": [
     "core:default",
+    "allow-analyze",
+    "allow-embed-lyrics",
+    "allow-read-lyrics",
+    "allow-open-genius",
+    "allow-genius-lyrics",
+    {
+      "identifier": "opener:allow-open-url",
+      "allow": [{ "url": "https://genius.com/*" }, { "url": "https://*.genius.com/*" }]
+    },
     "dialog:default",
     "fs:default",
     "fs:allow-read-file",
@@ -18,7 +27,7 @@
     },
     {
       "identifier": "http:default",
-      "allow": [{ "url": "https://lrclib.net/*" }]
+      "allow": [{ "url": "https://lrclib.net/*" }, { "url": "https://genius.com/*" }]
     }
   ]
 }

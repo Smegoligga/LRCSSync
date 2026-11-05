@@ -14,7 +14,9 @@ A lightweight lyrics timing editor for Windows, macOS, Linux and Android. Open a
 - Drag lines on the timeline, press and hold to zoom in for fine placement
 - Tap-sync: play the song and tap as each line starts
 - Nudge by 10, 50 or 100 ms, move every following line at once, loop a line, play from 0.1x to 4x speed
-- Lyrics from [LRCLIB](https://lrclib.net), a `.lrc` or `.txt` file, or pasted text
+- **Sync all**: times every line automatically, either by fitting existing timings to your recording or by listening to the song (on-device speech recognition)
+- Write lyrics from the audio, and recognise the song from what's sung
+- Lyrics from [LRCLIB](https://lrclib.net) and [Genius](https://genius.com), a `.lrc` or `.txt` file, or pasted text. Results show the source, year and whether they're explicit or censored, and censored lyrics can be uncensored
 - Splits lyrics into verses and choruses. Time one chorus and copy its timing to the others, found in the audio
 - Marks instrumental parts and can add breaks so the last line doesn't hang around
 - Edit, insert and delete lines, with undo and redo
@@ -40,7 +42,7 @@ The builds aren't signed by Apple or Microsoft, so you may get a warning the fir
 1. **Open song** and pick an audio file (or drop it on the window).
 2. **Lyrics** to search LRCLIB, paste lyrics or open a file. Synced results come in already timed. Plain lyrics you time yourself.
 3. Drag the green edges in the frequency view so the band covers the voice. The green lane below it shows where singing is.
-4. Play the song and press **Tap** (or Enter) as each line starts. Fix lines by dragging them, or with the nudge buttons.
+4. Press **Sync all**, or play the song and press **Tap** (or Enter) as each line starts. Fix lines by dragging them, or with the nudge buttons. Lines with an orange time are ones Sync all wasn't sure about.
 5. **Save .lrc**, or **Embed** to write the lyrics into the song itself.
 
 If a chorus repeats, time the first one, then press **Copy timing** on its header in the list.
@@ -72,7 +74,8 @@ Tests: `npm test` (editor logic) and `cargo test --manifest-path core/Cargo.toml
 
 ## Credits
 
-- Lyrics search by [LRCLIB](https://lrclib.net)
+- Lyrics search by [LRCLIB](https://lrclib.net) and [Genius](https://genius.com)
+- Speech recognition: [Whisper](https://github.com/openai/whisper) via [Transformers.js](https://github.com/huggingface/transformers.js)
 - Built with [Tauri](https://tauri.app)
 
 Licensed under [GPL-2.0](LICENSE).
