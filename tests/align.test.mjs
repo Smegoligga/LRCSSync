@@ -87,3 +87,17 @@ test('fit leaves already-matching lyrics alone', () => {
   const f = fitTiming(lines, level, hop);
   assert.equal(f.better, false, JSON.stringify(f));
 });
+
+test('words to lines: breaks before a capitalised word, not before I / I\'m', () => {
+  const said = 'I keep on falling down And I\'m never coming back Tonight I know Paris is calling';
+  const w = said.split(' ').map((t, i) => ({ text: t, start: i * 300, end: i * 300 + 280 }));
+  assert.deepEqual(wordsToLines(w).map(l => l.text),
+    ['I keep on falling down', "And I'm never coming back", 'Tonight I know', 'Paris is calling']);
+});
+
+test('words to lines: breaks where singing starts again after a breath', () => {
+  const said = 'we were young we were free';
+  const w = said.split(' ').map((t, i) => ({ text: t, start: i * 300 + (i >= 3 ? 150 : 0), end: i * 300 + 260 + (i >= 3 ? 150 : 0) }));
+  assert.deepEqual(wordsToLines(w).map(l => l.text), ['We were young we were free']);
+  assert.deepEqual(wordsToLines(w, { starts: [0, 1040] }).map(l => [l.t, l.text]), [[0, 'We were young'], [1050, 'We were free']]);
+});

@@ -26,6 +26,7 @@
         <button data-act="fit">Fit timing to this recording</button>
         <button data-act="breaks">Add breaks for instrumental parts</button>
         <button data-act="copy">Copy LRC</button>
+        <button data-act="replace">Find and replace</button>
         <button data-act="openLrc">Open .lrc or .txt</button>
         <button data-act="settings">Settings</button>
         <button data-act="keys">Keyboard shortcuts</button>
@@ -150,6 +151,18 @@
     </div>
   </dialog>
 
+  <dialog id="dlgReplace">
+    <form method="dialog" class="dlg-head"><h2>Find and replace</h2><button class="icon" aria-label="Close" value="close"><svg viewBox="0 0 24 24"><path d="M6.4 5 5 6.4 10.6 12 5 17.6 6.4 19l5.6-5.6 5.6 5.6 1.4-1.4-5.6-5.6L19 6.4 17.6 5 12 10.6z"/></svg></button></form>
+    <label class="field"><span>Find</span><input id="repFind" class="wide" autocomplete="off" spellcheck="false" placeholder="The word it got wrong"></label>
+    <label class="field"><span>Replace with</span><input id="repWith" class="wide" autocomplete="off" spellcheck="false" placeholder="Leave empty to remove it"></label>
+    <div class="rep-opts">
+      <label><input type="checkbox" id="repWhole" checked> Whole words only</label>
+      <label><input type="checkbox" id="repCase"> Match case</label>
+    </div>
+    <p class="muted rep-note">Without "Match case", the replacement follows the case of each match (word, Word, WORD).</p>
+    <div class="row-btns"><button class="primary" id="repAll">Replace all</button><span class="status" id="repCount"></span></div>
+  </dialog>
+
   <dialog id="dlgSettings">
     <form method="dialog" class="dlg-head"><h2>Settings</h2><button class="icon" aria-label="Close" value="close"><svg viewBox="0 0 24 24"><path d="M6.4 5 5 6.4 10.6 12 5 17.6 6.4 19l5.6-5.6 5.6 5.6 1.4-1.4-5.6-5.6L19 6.4 17.6 5 12 10.6z"/></svg></button></form>
     <label class="field"><span>Tap delay compensation</span>
@@ -191,6 +204,7 @@
       <tr><td>[ / ] / \</td><td>Slower / faster / normal speed</td></tr>
       <tr><td>E or F2</td><td>Edit the selected line's text</td></tr>
       <tr><td>I / Del</td><td>Insert a line below / delete the line</td></tr>
+      <tr><td>Ctrl+H or Ctrl+F</td><td>Find and replace a word in every line</td></tr>
       <tr><td>A</td><td>Sync all</td></tr>
       <tr><td>B</td><td>Add breaks for instrumental parts</td></tr>
       <tr><td>G / R / L</td><td>Snap / Move following / Loop line</td></tr>
