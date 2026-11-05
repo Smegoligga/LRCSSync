@@ -267,3 +267,11 @@ a { color: var(--accent-hi); }
 @media (max-height: 640px) and (min-width: 761px) {
   .timeline-wrap { height: 260px; }
 }
+
+/* Find and replace */
+#dlgReplace { width: min(460px, calc(100vw - 24px)); }
+.field input.wide { width: 100%; }
+.rep-opts { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 6px; }
+.rep-opts label { display: flex; align-items: center; gap: 6px; }
+.rep-note { font-size: 12px; margin: 4px 0 0; }
+#repCount { margin: 0 0 0 6px; align-self: center; }

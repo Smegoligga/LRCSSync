@@ -116,25 +116,50 @@ export function alignLines(lines, words) {
   return res;
 }
 
-/** Turns transcribed words into timed lines, breaking at pauses and long runs. */
-export function wordsToLines(words, { pauseMs = 650, maxWords = 10 } = {}) {
+const SELF = /^(i|im|ill|id|ive|ima)$/; // "I", "I'm", "I'll"... are capitalised anywhere in a line
+
+/** Index of the first value >= x in a sorted array. */
+function lowerBound(arr, x) {
+  let lo = 0, hi = arr.length;
+  while (lo < hi) { const m = (lo + hi) >> 1; if (arr[m] < x) lo = m + 1; else hi = m; }
+  return lo;
+}
+
+/**
+ * Turns transcribed words into timed lines. A new line starts at:
+ *  - a pause longer than `pauseMs`, or where the singing starts again after a breath (`starts`, ms, sorted),
+ *  - a word the speech model capitalised (it capitalises the first word of each phrase - not "I", "I'm"...),
+ *  - after . ! ? and after a comma once the line is long,
+ *  - `maxWords` words.
+ */
+export function wordsToLines(words, { pauseMs = 650, maxWords = 10, starts = [] } = {}) {
   const lines = [];
   let cur = null;
   for (const w of words) {
     const text = String(w.text || '').trim();
     if (!text) continue;
-    const gap = cur ? w.start - cur.end : Infinity;
-    const ends = cur && /[.!?]$/.test(cur.words[cur.words.length - 1]);
-    if (!cur || gap > pauseMs || cur.words.length >= maxWords || (ends && cur.words.length >= 3)) {
-      if (cur) lines.push(cur);
-      cur = { t: w.start, end: w.end, words: [] };
+    if (cur) {
+      const n = cur.words.length, last = cur.words[n - 1];
+      const gap = w.start - cur.end;
+      const bare = text.replace(/[^\p{L}]/gu, '');
+      const capital = /^\p{Lu}/u.test(bare) && !SELF.test(bare.toLowerCase()) && bare !== bare.toUpperCase();
+      const k = lowerBound(starts, cur.lastStart + 200);
+      const breath = k < starts.length && starts[k] <= w.start + 150;
+      if (gap > pauseMs || n >= maxWords ||
+          (/[.!?]["')]?$/.test(last) && n >= 2) ||
+          (capital && n >= 2) ||
+          (breath && n >= 3 && gap > 60) ||
+          (/,$/.test(last) && n >= 6)) {
+        lines.push(cur); cur = null;
+      }
     }
+    if (!cur) cur = { t: w.start, end: w.end, words: [] };
     cur.words.push(text);
-    cur.end = w.end;
+    cur.end = w.end; cur.lastStart = w.start;
   }
   if (cur) lines.push(cur);
   return lines.map(l => ({
     t: Math.round(l.t),
-    text: l.words.join(' ').replace(/\s+([,.!?])/g, '$1').replace(/^[a-z]/, c => c.toUpperCase()).replace(/[.,]$/, ''),
+    text: l.words.join(' ').replace(/\s+([,.!?])/g, '$1').replace(/^\p{Ll}/u, c => c.toUpperCase()).replace(/[.,]$/, ''),
   }));
 }

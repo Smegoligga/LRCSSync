@@ -8,6 +8,7 @@ import { Timeline } from './timeline.js';
 import * as P from './platform.js';
 import { Player } from './player.js';
 import { alignLines, wordsToLines } from './align.js';
+import { replaceAll, countMatches } from './replace.js';
 import { fitTiming, applyFit } from './fit.js';
 import { transcribe, MODELS } from './asr.js';
 import { identify } from './identify.js';
@@ -732,7 +733,7 @@ async function syncAll() {
   const res = alignLines(L, words);
   history.push(state.doc);
   L.forEach((l, i) => { if (res[i].t != null) { l.t = res[i].t; l.conf = res[i].conf; } });
-  snapAll(180);
+  snapAll(260);
   addBreaksQuiet();
   setDirty(true); renderList(); timeline.request();
   const check = L.filter(l => l.text && l.conf != null && l.conf < 0.5).length;
@@ -766,7 +767,7 @@ async function writeFromAudio() {
     } else if (words && words.length) {
       const res = alignLines(state.doc.lines, words);
       state.doc.lines.forEach((l, i) => { if (res[i].t != null) { l.t = res[i].t; l.conf = res[i].conf; } });
-      snapAll(180);
+      snapAll(260);
       renderList(); timeline.request();
       toast(`Recognised "${found.title}" by ${found.artist}, used its lyrics from ${found.source} and timed them from the audio.`, 6000);
     }
@@ -774,9 +775,9 @@ async function writeFromAudio() {
   }
   if (!words) return;
   if (!words.length) { toast("Couldn't hear any words. Try a bigger speech model in Settings.", 5000); return; }
-  const lines = wordsToLines(words).map(l => { const ln = newLine(l.t, l.text); ln.conf = 0.4; return ln; });
+  const lines = wordsToLines(words, { starts: state.voice ? state.voice.starts : [] }).map(l => { const ln = newLine(l.t, l.text); ln.conf = 0.4; return ln; });
   replaceDoc({ meta: { ti: state.tags.title, ar: state.tags.artist }, lines, synced: true }, { quiet: true });
-  snapAll(150);
+  snapAll(320);   // the speech model's word times are rough: move each line onto where the singing actually starts
   addBreaksQuiet();
   renderList(); timeline.request();
   toast(`Wrote ${lines.length} lines from the audio. It's a draft: check the words before saving.`, 6000);
@@ -1082,6 +1083,8 @@ menu.addEventListener('click', async e => {
     addBreaks();
   } else if (act === 'embed') {
     openEmbedDialog();
+  } else if (act === 'replace') {
+    openReplace();
   } else if (act === 'openLrc') {
     $('openLrcFile').click();
   } else if (act === 'settings') {
@@ -1099,6 +1102,34 @@ $('setSnapPx').onchange = e => { state.snapPx = Math.max(2, Math.min(40, +e.targ
 $('setGapSec').onchange = e => { state.gapSec = Math.max(1, Math.min(30, +e.target.value || 4)); P.store('gapSec', state.gapSec); updateGaps(); timeline.request(); };
 $('resetBand').onclick = () => { setBand(DEFAULT_BAND.lo, DEFAULT_BAND.hi, true); toast('Voice band reset'); };
 
+// ---------------- find & replace ----------------
+const rOpts = () => ({ matchCase: $('repCase').checked, wholeWord: $('repWhole').checked });
+function replaceCount() {
+  const n = countMatches(state.doc.lines, $('repFind').value, rOpts());
+  $('repCount').textContent = $('repFind').value.trim() ? `${n} match${n === 1 ? '' : 'es'}` : '';
+  $('repAll').disabled = !n;
+}
+function openReplace() {
+  if (!state.doc.lines.some(l => l.text)) { toast('No lyrics yet'); return; }
+  replaceCount();
+  $('dlgReplace').showModal();
+  $('repFind').focus(); $('repFind').select();
+}
+function doReplace() {
+  const find = $('repFind').value, repl = $('repWith').value;
+  const before = structuredClone(state.doc);
+  const r = replaceAll(state.doc.lines, find, repl, rOpts());
+  if (!r.count) { replaceCount(); return; }
+  history.push(before);
+  setDirty(true); renderList(); timeline.request();
+  replaceCount();
+  toast(`Replaced ${r.count} time${r.count === 1 ? '' : 's'} in ${r.lines} line${r.lines === 1 ? '' : 's'}. Ctrl+Z to undo.`, 4000);
+}
+['repFind', 'repCase', 'repWhole'].forEach(id => $(id).addEventListener('input', replaceCount));
+$('repAll').onclick = e => { e.preventDefault(); doReplace(); };
+$('repWith').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); doReplace(); } });
+$('repFind').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); $('repWith').focus(); } });
+
 // ---------------- keyboard ----------------
 document.addEventListener('keydown', e => {
   if (e.target.closest('input, textarea, select') || document.querySelector('dialog[open]')) return;
@@ -1109,6 +1140,7 @@ document.addEventListener('keydown', e => {
   else if (ctrl && (k === 'y' || k === 'Y')) redo();
   else if (ctrl && (k === 's' || k === 'S')) save();
   else if (ctrl && (k === 'o' || k === 'O')) $('btnOpen').click();
+  else if (ctrl && (k === 'h' || k === 'H' || k === 'f' || k === 'F')) openReplace();
   else if (ctrl) handled = false;
   else if (k === ' ') togglePlay();
   else if (k === 'Enter' || k === 't' || k === 'T') tap();
