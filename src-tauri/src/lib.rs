@@ -1,20 +1,48 @@
+use std::borrow::Cow;
+
 use tauri::ipc::{InvokeBody, Request, Response};
 use tauri::{Emitter, Manager};
+
+/// The binary body of a command. Desktop gets it raw; Android's webview bridge can't carry
+/// raw bytes, so there it arrives as JSON - an array of numbers or {"0": n, "1": n, ...}.
+fn body_bytes<'a>(request: &'a Request<'_>, what: &str) -> Result<Cow<'a, [u8]>, String> {
+    match request.body() {
+        InvokeBody::Raw(b) => Ok(Cow::Borrowed(b.as_slice())),
+        InvokeBody::Json(v) => json_bytes(v).map(Cow::Owned).ok_or_else(|| format!("expected {what}")),
+        #[allow(unreachable_patterns)]
+        _ => Err(format!("expected {what}")),
+    }
+}
+
+fn json_bytes(v: &serde_json::Value) -> Option<Vec<u8>> {
+    use serde_json::Value;
+    let byte = |x: &Value| x.as_u64().filter(|n| *n < 256).map(|n| n as u8);
+    match v {
+        Value::Array(a) => a.iter().map(byte).collect(),
+        Value::Object(m) => {
+            let mut out = vec![0u8; m.len()];
+            for (k, x) in m {
+                let i: usize = k.parse().ok()?;
+                *out.get_mut(i)? = byte(x)?;
+            }
+            Some(out)
+        }
+        _ => None,
+    }
+}
 
 /// Takes raw little-endian f32 mono samples at 16 kHz (the UI decodes the audio) and
 /// returns the spectrogram in the binary layout from `lrcs_core::Spectrogram::to_bytes`.
 #[tauri::command]
 async fn analyze(request: Request<'_>) -> Result<Response, String> {
-    let InvokeBody::Raw(bytes) = request.body() else {
-        return Err("expected raw audio samples".into());
-    };
+    let bytes = body_bytes(&request, "raw audio samples")?;
     let sample_rate = request
         .headers()
         .get("sample-rate")
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.parse().ok())
         .unwrap_or(16000);
-    let samples = lrcs_core::spectrogram::samples_from_bytes(bytes);
+    let samples = lrcs_core::spectrogram::samples_from_bytes(&bytes);
     let spec = lrcs_core::analyze(&samples, sample_rate);
     Ok(Response::new(spec.to_bytes()))
 }
@@ -22,20 +50,16 @@ async fn analyze(request: Request<'_>) -> Result<Response, String> {
 /// Body: u32 LE lyrics length, lyrics, audio bytes. Returns the audio with the lyrics in its tags.
 #[tauri::command]
 async fn embed_lyrics(request: Request<'_>) -> Result<Response, String> {
-    let InvokeBody::Raw(body) = request.body() else {
-        return Err("expected raw data".into());
-    };
-    let (lyrics, audio) = lrcs_core::tags::split_request(body)?;
+    let body = body_bytes(&request, "raw data")?;
+    let (lyrics, audio) = lrcs_core::tags::split_request(&body)?;
     Ok(Response::new(lrcs_core::tags::embed_lyrics(audio, &lyrics)?))
 }
 
 /// Body: audio bytes. Returns the lyrics embedded in its tags, if any.
 #[tauri::command]
 async fn read_lyrics(request: Request<'_>) -> Result<Option<String>, String> {
-    let InvokeBody::Raw(body) = request.body() else {
-        return Err("expected raw data".into());
-    };
-    Ok(lrcs_core::tags::read_lyrics(body))
+    let body = body_bytes(&request, "raw data")?;
+    Ok(lrcs_core::tags::read_lyrics(&body))
 }
 
 /// Opens a Genius page in its own window (desktop) so you can pass Genius's bot check.
