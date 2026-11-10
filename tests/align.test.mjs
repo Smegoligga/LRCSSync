@@ -101,3 +101,54 @@ test('words to lines: breaks where singing starts again after a breath', () => {
   assert.deepEqual(wordsToLines(w).map(l => l.text), ['We were young we were free']);
   assert.deepEqual(wordsToLines(w, { starts: [0, 1040] }).map(l => [l.t, l.text]), [[0, 'We were young'], [1050, 'We were free']]);
 });
+
+// --- with a map of where the singing is ---
+function sung(lines, starts) {
+  // one region per line: from its start to the end of its last word
+  return starts.map((s, i) => [s, s + lines[i].split(' ').length * 400]);
+}
+
+test('first word stretched back into a silence starts where the singing does', () => {
+  const lyr = ['hello darkness my old friend', 'I have come to talk with you again', 'because a vision softly creeping'];
+  const starts = [2000, 9000, 16000];
+  // the speech model puts the first word of lines 2 and 3 seconds too early, inside the instrumental gap
+  const words = hear(lyr, starts, (w, i, k) => (i > 0 && k === 0 ? { ...w, start: w.start - 2600 } : w));
+  const regions = sung(lyr, starts);
+  const plain = alignLines(lyr.map(text => ({ text })), words);
+  assert.ok(Math.abs(plain[1].t - 9000) <= 500, 'without the map the over-long word is still pulled in: ' + plain[1].t);
+  const r = alignLines(lyr.map(text => ({ text })), words, { voice: { regions, starts: regions.map(x => x[0]), onsets: [] } });
+  assert.deepEqual(r.map(x => x.t), starts);
+});
+
+test('a word that lasts absurdly long is taken to end on time', () => {
+  const lyr = ['one two three four', 'five six seven eight'];
+  const starts = [1000, 8000];
+  const words = hear(lyr, starts, (w, i, k) => (i === 1 && k === 0 ? { ...w, start: w.start - 3000 } : w));
+  const r = alignLines(lyr.map(text => ({ text })), words);
+  assert.ok(Math.abs(r[1].t - 8000) <= 500, String(r[1].t));
+});
+
+test('an unheard section is placed in the singing, not in the instrumental gap before it', () => {
+  const verse1 = ['alpha bravo charlie delta echo', 'foxtrot golf hotel india juliet', 'kilo lima mike november oscar'];
+  const chorus = ['papa quebec romeo sierra tango', 'uniform victor whiskey xray yankee', 'zulu amber birch cedar dune'];
+  const verse2 = ['jade kelp lark moss north', 'opal pine quill reed sage'];
+  const lyr = [...verse1, ...chorus, ...verse2];
+  const starts = [5000, 7500, 10000, /* 8 s of guitar */ 20000, 22500, 25000, 28000, 30500];
+  const words = hear(lyr, starts).filter(w => !chorus.join(' ').split(' ').includes(w.text));
+  const regions = sung(lyr, starts);
+  const voice = { regions, starts: regions.map(x => x[0]), onsets: [] };
+  const plain = alignLines(lyr.map(text => ({ text })), words);
+  assert.ok(plain[3].t < 16000, 'by the clock alone the chorus starts in the gap: ' + plain[3].t);
+  const r = alignLines(lyr.map(text => ({ text })), words, { voice });
+  [3, 4, 5].forEach(i => assert.ok(Math.abs(r[i].t - starts[i]) <= 300, `line ${i}: ${r[i].t} vs ${starts[i]}`));
+  assert.ok(r.slice(3, 6).every(x => x.conf === 0));
+});
+
+test('unheard lines at the very start are stepped back through the singing', () => {
+  const lyr = ['one two three four', 'five six seven eight', 'nine ten eleven twelve', 'red green blue pink', 'north south east west'];
+  const starts = [3000, 5000, 7000, 9000, 11000];
+  const words = hear(lyr, starts).filter(w => w.start >= 7000);
+  const regions = sung(lyr, starts);
+  const r = alignLines(lyr.map(text => ({ text })), words, { voice: { regions, starts: regions.map(x => x[0]), onsets: [] } });
+  assert.ok(Math.abs(r[0].t - 3000) <= 400 && Math.abs(r[1].t - 5000) <= 400, JSON.stringify(r.map(x => x.t)));
+});

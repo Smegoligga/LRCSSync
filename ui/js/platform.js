@@ -101,9 +101,21 @@ export async function copyText(text) {
   return ok;
 }
 
+/**
+ * A web page can't read genius.com directly (the browser blocks it), so a site hosting the web build can run a
+ * small relay and set window.LRCSSYNC_GENIUS_PROXY to its address (e.g. "/genius"). The relay only has to pass
+ * GET /api/search/multi and song pages on to https://genius.com.
+ */
+export const geniusProxy = () => (typeof window !== 'undefined' && !T() && window.LRCSSYNC_GENIUS_PROXY) || null;
+
 export function httpFetch(url, init) {
   const f = T()?.http?.fetch;
-  return f ? f(url, init) : fetch(url, init);
+  if (f) return f(url, init);
+  const relay = geniusProxy();
+  if (relay && url.startsWith('https://genius.com/')) {
+    return fetch(String(relay).replace(/\/+$/, '') + url.slice('https://genius.com'.length), { ...init, headers: { ...(init && init.headers), 'X-LRCSSync': '1' } });
+  }
+  return fetch(url, init);
 }
 
 /** Runs the Rust analysis; returns an ArrayBuffer, or null when not in the app. */

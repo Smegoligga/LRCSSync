@@ -1,6 +1,6 @@
 // Genius lyrics: search, fetch and clean. When Genius shows a bot check, the app opens a Genius window
 // where you pass the check and the lyrics are sent back automatically.
-import { httpFetch, isApp } from './platform.js';
+import { httpFetch, isApp, geniusProxy } from './platform.js';
 
 const decode = s => s
   .replace(/&#x([0-9a-f]+);/gi, (_, h) => String.fromCodePoint(parseInt(h, 16)))
@@ -105,4 +105,5 @@ export async function openGeniusWindow(url) {
   return null;
 }
 
-export const geniusAvailable = () => isApp();
+/** Genius can be read in the app, and on a website that runs a relay for it (see platform.js). */
+export const geniusAvailable = () => isApp() || !!geniusProxy();

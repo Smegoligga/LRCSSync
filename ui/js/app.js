@@ -12,7 +12,7 @@ import { replaceAll, countMatches } from './replace.js';
 import { fitTiming, applyFit } from './fit.js';
 import { transcribe, MODELS } from './asr.js';
 import { identify } from './identify.js';
-import { searchGenius, fetchGeniusLyrics, openGeniusWindow } from './genius.js';
+import { searchGenius, fetchGeniusLyrics, openGeniusWindow, geniusAvailable } from './genius.js';
 import { rating, uncensor } from './censor.js';
 import { findSections, instrumentalGaps, audioFeatures, findRepeat, mapLines, secColor } from './sections.js';
 
@@ -730,7 +730,7 @@ async function syncAll() {
   const words = await listen();
   if (!words) return;
   if (words.length < 5) { toast("Couldn't hear enough words. Fit the voice band to the singer, or try a bigger speech model in Settings.", 6000); return; }
-  const res = alignLines(L, words);
+  const res = alignLines(L, words, { voice: state.voice });
   history.push(state.doc);
   L.forEach((l, i) => { if (res[i].t != null) { l.t = res[i].t; l.conf = res[i].conf; } });
   snapAll(260);
@@ -765,7 +765,7 @@ async function writeFromAudio() {
       autoFit({ quiet: true });
       toast(`Recognised "${found.title}" by ${found.artist} and used its synced lyrics from ${found.source}.`, 6000);
     } else if (words && words.length) {
-      const res = alignLines(state.doc.lines, words);
+      const res = alignLines(state.doc.lines, words, { voice: state.voice });
       state.doc.lines.forEach((l, i) => { if (res[i].t != null) { l.t = res[i].t; l.conf = res[i].conf; } });
       snapAll(260);
       renderList(); timeline.request();
@@ -868,12 +868,13 @@ $('searchForm').addEventListener('submit', async e => {
   e.preventDefault();
   const title = $('qTitle').value.trim(), artist = $('qArtist').value.trim();
   if (!title && !artist) return;
-  $('searchStatus').textContent = 'Searching LRCLIB and Genius...';
+  const useGenius = geniusAvailable();   // a plain web page can't reach Genius unless its site relays it
+  $('searchStatus').textContent = useGenius ? 'Searching LRCLIB and Genius...' : 'Searching LRCLIB...';
   $('results').innerHTML = '';
   $('preview').hidden = true;
   const [lr, gr] = await Promise.allSettled([
     searchLrclib({ title, artist }, state.duration),
-    searchGenius([title, artist].filter(Boolean).join(' ')),
+    useGenius ? searchGenius([title, artist].filter(Boolean).join(' ')) : Promise.resolve([]),
   ]);
   const res = [];
   const genius = gr.status === 'fulfilled' ? gr.value : [];
