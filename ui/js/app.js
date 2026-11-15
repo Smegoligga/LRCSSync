@@ -114,7 +114,7 @@ async function openAudio(file) {
     busy('Reading audio...');
     const { samples, rate } = await decodeMono(file.bytes);
     const hadSong = !!state.file;
-    state.file = { name: file.name, path: file.path, bytes: file.bytes };
+    state.file = { name: file.name, path: file.path, bytes: file.bytes, handle: file.handle || null };
     state.tags = readTags(file.bytes, file.name);
     state.pcm = rate === SR ? samples : null;
     state.peaks = computePeaks(samples, rate);
@@ -803,8 +803,13 @@ function addBreaksQuiet() {
 function openEmbedDialog() {
   if (!state.file) { toast('Open a song first'); return; }
   if (!state.doc.lines.length) { toast('Nothing to embed yet'); return; }
-  if (!P.isApp()) { toast('Embedding into song files needs the desktop or Android app (see the GitHub releases)', 4500); return; }
+  if (!P.canEmbed()) { toast('Embedding into song files needs the desktop or Android app (see the GitHub releases)', 4500); return; }
   $('embedName').textContent = state.file.name;
+  // the web version can only overwrite files opened with a handle (Chrome/Edge on a computer)
+  const canWrite = P.isApp() ? true : !!state.file.handle;
+  $('embedOverwrite').hidden = !canWrite;
+  $('embedCopy').textContent = P.isApp() ? 'Save a copy with lyrics' : 'Download a copy with lyrics';
+  $('embedWebNote').hidden = P.isApp() || canWrite;
   $('dlgEmbed').showModal();
 }
 
@@ -814,9 +819,9 @@ async function embed(mode) {
   try {
     const out = await P.embedLyrics(state.file.bytes, lrcText());
     let where = null;
-    if (mode === 'overwrite' && state.file.path) {
+    if (mode === 'overwrite' && (state.file.path || state.file.handle)) {
       try {
-        await P.writeBytes(state.file.path, out);
+        await P.writeBytes(state.file.path, out, state.file.handle);
         where = state.file.name;
       } catch (e) {
         console.warn('overwrite failed', e);
@@ -1096,7 +1101,7 @@ menu.addEventListener('click', async e => {
     $('setLang').value = state.lang;
     $('dlgSettings').showModal();
   } else if (act === 'keys') $('dlgKeys').showModal();
-  else if (act === 'about') { $('aboutVersion').textContent = state.version ? 'v' + state.version : ''; $('dlgAbout').showModal(); }
+  else if (act === 'about') { $('aboutVersion').textContent = state.version ? 'v' + state.version : ''; $('dlgAbout').showModal(); checkUpdate(true); }
 });
 $('setTapComp').onchange = e => { state.tapComp = Math.max(0, Math.min(500, +e.target.value || 0)); P.store('tapComp', state.tapComp); };
 $('setSnapPx').onchange = e => { state.snapPx = Math.max(2, Math.min(40, +e.target.value || 10)); P.store('snapPx', state.snapPx); };
@@ -1180,7 +1185,7 @@ document.addEventListener('keydown', e => {
 });
 
 // ---------------- drops, start ----------------
-P.onFileDrop(async ({ paths, files }) => {
+P.onFileDrop(async ({ paths, files, handle }) => {
   try {
     if (paths) {
       const p = paths[0];
@@ -1189,7 +1194,10 @@ P.onFileDrop(async ({ paths, files }) => {
     } else if (files) {
       const f = files[0];
       if (/\.(lrc|txt)$/i.test(f.name)) replaceDoc(parse(await f.text()));
-      else openAudio({ name: f.name, path: null, bytes: new Uint8Array(await f.arrayBuffer()) });
+      else {
+        const h = handle ? await handle : null;
+        openAudio({ name: f.name, path: null, handle: h && h.kind === 'file' ? h : null, bytes: new Uint8Array(await f.arrayBuffer()) });
+      }
     }
   } catch (e) { toast("Couldn't open that: " + (e.message || e), 5000); }
 });
@@ -1205,7 +1213,55 @@ window.addEventListener('beforeunload', e => { if (state.dirty) { e.preventDefau
   renderList();
   updateClock();
   timeline.request();
+  checkUpdate(false);
 })();
+
+// ---------------- updates ----------------
+const REPO = 'https://github.com/Smegoligga/LRCSSync';
+
+/** Compares dotted versions numerically (0.10 > 0.9.2). */
+export function newerVersion(a, b) {
+  const x = String(a).split(/[^0-9]+/).filter(Boolean).map(Number), y = String(b).split(/[^0-9]+/).filter(Boolean).map(Number);
+  for (let i = 0; i < Math.max(x.length, y.length); i++) {
+    if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) > (y[i] || 0);
+  }
+  return false;
+}
+
+/**
+ * The apps look for a newer GitHub release once a day (or when About is opened) and say so. The web version is
+ * always the newest already: the site replaces it when a release comes out.
+ */
+async function checkUpdate(byHand) {
+  const line = $('aboutUpdate');
+  if (!P.isApp()) { if (line) line.textContent = 'The website always runs the newest version.'; return; }
+  const last = P.load('updateChecked', 0);
+  if (!byHand && Date.now() - last < 20 * 3600e3) return;
+  if (line && byHand) line.textContent = 'Checking for updates...';
+  try {
+    const res = await P.httpFetch('https://api.github.com/repos/Smegoligga/LRCSSync/releases?per_page=5', { method: 'GET', headers: { Accept: 'application/vnd.github+json' } });
+    const list = await res.json();
+    P.store('updateChecked', Date.now());
+    const rel = (Array.isArray(list) ? list : []).filter(r => !r.draft)
+      .map(r => ({ v: String(r.tag_name || '').replace(/^v/i, ''), url: r.html_url }))
+      .sort((a, b) => (newerVersion(a.v, b.v) ? -1 : newerVersion(b.v, a.v) ? 1 : 0))[0];
+    const have = state.version || '0';
+    if (rel && newerVersion(rel.v, have)) {
+      if (line) line.innerHTML = '';
+      if (line) { const a = document.createElement('a'); a.href = rel.url; a.textContent = `Version ${rel.v} is out (you have ${have})`; a.onclick = e => { e.preventDefault(); P.openExternal(rel.url); }; line.append(a); }
+      if (!byHand && P.load('updateSkipped', '') !== rel.v) {
+        toast(`LRCSSync ${rel.v} is out. Open the menu > About to get it.`, 6000);
+        P.store('updateSkipped', rel.v);
+      }
+    } else if (line) line.textContent = `You have the newest version (${have}).`;
+  } catch (e) {
+    if (line && byHand) line.textContent = "Couldn't check for updates.";
+  }
+}
+$('aboutGithub').onclick = e => { e.preventDefault(); P.openExternal(REPO); };
+$('aboutSite').onclick = e => { e.preventDefault(); P.openExternal('https://smegolas.com'); };
+$('aboutObtainium').onclick = e => { e.preventDefault(); P.openExternal('obtainium://add/' + REPO).catch(() => toast('Install Obtainium first')); };
+$('aboutObtainium').hidden = !(P.isApp() && P.isMobile());
 
 // test hooks (used by the browser checks)
 window.lrcsApi = { audio, openAudio, syncAll, writeFromAudio, autoFit, snapAll, listen, copySectionTiming, addBreaks, sectionAction, replaceDoc, parse, tap, nudge, select, seek, setBand, lrcText, undo, redo, timeline };

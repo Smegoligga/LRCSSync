@@ -1,0 +1,35 @@
+name: Check
+
+# Pull requests: tests, including the web version's tag module, before anything is merged.
+on:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - name: Tag module for the web version
+        run: |
+          cargo build --release --target wasm32-unknown-unknown --manifest-path web-tags/Cargo.toml
+          ls -la web-tags/target/wasm32-unknown-unknown/release/*.wasm
+      - name: UI tests
+        run: node --test tests/*.test.mjs
+      - name: Web build
+        env:
+          LRCSSYNC_REQUIRE_TAGS: "1"
+        run: |
+          npm ci
+          node scripts/build-web.mjs dist/LRCSSync_web.html
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web-build
+          path: dist/LRCSSync_web.html

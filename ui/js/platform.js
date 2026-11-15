@@ -1,4 +1,5 @@
 // File and network access: Tauri plugins in the app, browser APIs as a fallback.
+import { wasmEmbed, wasmRead, tagsWasmAvailable } from './tagswasm.js';
 
 const T = () => window.__TAURI__;
 export const isApp = () => !!T();
@@ -30,9 +31,28 @@ function pickBrowser(accept) {
   });
 }
 
-/** Asks for an audio file. Returns { name, path, bytes } or null. */
+/**
+ * Browsers that can write back to a file the user opened (Chrome and Edge on a computer) get a file handle, so
+ * "Write into this song" can overwrite it. Others (Firefox, Safari, phones) can only download a copy.
+ */
+export const canOverwriteInBrowser = () => !isApp() && typeof window.showOpenFilePicker === 'function';
+
+async function pickBrowserHandle() {
+  try {
+    const [handle] = await window.showOpenFilePicker({
+      types: [{ description: 'Audio', accept: { 'audio/*': AUDIO_EXT.map(e => '.' + e) } }],
+    });
+    const f = await handle.getFile();
+    return { name: f.name, path: null, handle, bytes: new Uint8Array(await f.arrayBuffer()) };
+  } catch (e) {
+    if (e && e.name === 'AbortError') return null;
+    return pickBrowser('audio/*');
+  }
+}
+
+/** Asks for an audio file. Returns { name, path, bytes, handle? } or null. */
 export async function pickAudio() {
-  if (!isApp()) return pickBrowser('audio/*');
+  if (!isApp()) return canOverwriteInBrowser() ? pickBrowserHandle() : pickBrowser('audio/*');
   const path = await T().dialog.open({
     multiple: false,
     filters: isMobile() ? undefined : [{ name: 'Audio', extensions: AUDIO_EXT }],
@@ -139,7 +159,10 @@ export function onFileDrop(cb) {
   window.addEventListener('drop', e => {
     e.preventDefault();
     const files = [...(e.dataTransfer?.files || [])];
-    if (files.length) cb({ files });
+    // Chrome/Edge: a handle for the dropped file, so it can be overwritten later (must be asked for right now)
+    const item = [...(e.dataTransfer?.items || [])].find(i => i.kind === 'file');
+    const handle = item && typeof item.getAsFileSystemHandle === 'function' ? item.getAsFileSystemHandle().catch(() => null) : null;
+    if (files.length) cb({ files, handle });
   });
 }
 
@@ -153,7 +176,7 @@ export function store(key, value) {
 /** Audio bytes with `lyrics` written into the tags (Rust core). */
 export async function embedLyrics(audioBytes, lyrics) {
   const invoke = T()?.core?.invoke;
-  if (!invoke) throw new Error('Embedding needs the app');
+  if (!invoke) return wasmEmbed(audioBytes, lyrics);
   const text = new TextEncoder().encode(lyrics);
   const body = new Uint8Array(4 + text.length + audioBytes.length);
   new DataView(body.buffer).setUint32(0, text.length, true);
@@ -166,13 +189,35 @@ export async function embedLyrics(audioBytes, lyrics) {
 /** Lyrics embedded in the audio's tags, or null. */
 export async function readEmbedded(audioBytes) {
   const invoke = T()?.core?.invoke;
-  if (!invoke) return null;
+  if (!invoke) {
+    if (!tagsWasmAvailable()) return null;
+    try { return await wasmRead(audioBytes); } catch { return null; }
+  }
   try { return await invoke('read_lyrics', audioBytes); } catch { return null; }
 }
 
-/** Overwrites a file with bytes. */
-export async function writeBytes(path, bytes) {
+/** Whether this build can embed lyrics (apps always; the web version when its tag module is built in). */
+export const canEmbed = () => isApp() || tagsWasmAvailable();
+
+/** Overwrites a file with bytes: a path in the app, or a browser file handle. */
+export async function writeBytes(path, bytes, handle) {
+  if (handle) {
+    if (handle.requestPermission && (await handle.requestPermission({ mode: 'readwrite' })) !== 'granted') {
+      throw new Error('No permission to change the file');
+    }
+    const w = await handle.createWritable();
+    await w.write(bytes);
+    await w.close();
+    return;
+  }
   await T().fs.writeFile(path, bytes);
+}
+
+/** Opens a link outside the app (browser, or another app such as Obtainium). */
+export async function openExternal(url) {
+  const o = T()?.opener;
+  if (o?.openUrl) return o.openUrl(url);
+  window.open(url, '_blank', 'noopener');
 }
 
 /** Asks where to save a copy of the song. */

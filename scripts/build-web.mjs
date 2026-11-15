@@ -1,12 +1,18 @@
 // Builds a single self-contained HTML file of the editor for the web (lyrics.smegolas.com).
 // Usage: node scripts/build-web.mjs [out.html]
 import { build } from 'esbuild';
-import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { dirname } from 'node:path';
 
 const out = process.argv[2] || 'dist/lrcssync-web.html';
 // Optional: LRCSSYNC_GENIUS_PROXY=/genius bakes in the address of a Genius relay run by the hosting site.
 const geniusProxy = process.env.LRCSSYNC_GENIUS_PROXY || '';
+// The apps' tag code as WebAssembly (web-tags/), so the web version can embed lyrics too. Built with:
+//   cargo build --release --target wasm32-unknown-unknown --manifest-path web-tags/Cargo.toml
+const wasmPath = process.env.LRCSSYNC_TAGS_WASM || 'web-tags/target/wasm32-unknown-unknown/release/lrcs_web_tags.wasm';
+const tagsWasm = existsSync(wasmPath) ? readFileSync(wasmPath).toString('base64') : '';
+if (!tagsWasm) console.warn(`note: ${wasmPath} not found, so this web build can't embed lyrics`);
+if (process.env.LRCSSYNC_REQUIRE_TAGS && !tagsWasm) { console.error('the tag module is required for this build'); process.exit(1); }
 const version = JSON.parse(readFileSync('src-tauri/tauri.conf.json', 'utf8')).version.replace(/\.0$/, '');
 const js = (await build({ entryPoints: ['ui/js/app.js'], bundle: true, format: 'iife', write: false, target: 'es2020', legalComments: 'none' })).outputFiles[0].text;
 const css = readFileSync('ui/style.css', 'utf8');
@@ -16,7 +22,7 @@ let html = readFileSync('ui/index.html', 'utf8');
 html = html
   .replace('<link rel="stylesheet" href="style.css">', `<link rel="icon" href="${icon}">\n  <style>\n${css}\n  </style>`)
   .replace(/src="icon\.png"/g, `src="${icon}"`)
-  .replace('<script type="module" src="js/app.js"></script>', () => `<script>window.LRCSSYNC_WEB_VERSION = ${JSON.stringify(version)};${geniusProxy ? ` window.LRCSSYNC_GENIUS_PROXY = ${JSON.stringify(geniusProxy)};` : ''}</script>\n  <script>\n${js.replace(/<\/script/gi, '<\\/script')}\n  </script>`);
+  .replace('<script type="module" src="js/app.js"></script>', () => `<script>window.LRCSSYNC_WEB_VERSION = ${JSON.stringify(version)};${geniusProxy ? ` window.LRCSSYNC_GENIUS_PROXY = ${JSON.stringify(geniusProxy)};` : ''}</script>${tagsWasm ? `\n  <script>window.LRCSSYNC_TAGS_WASM = "${tagsWasm}";</script>` : ''}\n  <script>\n${js.replace(/<\/script/gi, '<\\/script')}\n  </script>`);
 
 const header = `<!--
   LRCSSync ${version} (web build) - lyrics timing editor
@@ -24,7 +30,9 @@ const header = `<!--
 
   Everything is in this one file. To host it, serve it as index.html (e.g. at lyrics.smegolas.com).
   It runs fully in the browser: audio is analysed locally and never uploaded. LRCLIB search uses
-  https://lrclib.net from the browser. Embedding lyrics into song files needs the desktop/Android app.
+  https://lrclib.net from the browser. Embedding lyrics into song files uses the apps' own tag code, built
+  to WebAssembly (web-tags/); the page needs 'wasm-unsafe-eval' in script-src for it. Chrome and Edge on a
+  computer can overwrite the opened song; other browsers download a copy.
 
   Genius: browsers don't let a web page read genius.com, so Genius search only works when the hosting site
   relays it. Build with LRCSSYNC_GENIUS_PROXY=/genius (or set window.LRCSSYNC_GENIUS_PROXY before this script)

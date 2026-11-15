@@ -1,0 +1,23 @@
+[package]
+name = "lrcs-web-tags"
+version = "0.3.2"
+edition = "2021"
+license = "GPL-2.0-only"
+description = "LRCSSync's tag reading/writing (lrcs-core, lofty) as a small WebAssembly module for the web version"
+
+[lib]
+crate-type = ["cdylib"]
+path = "src/lib.rs"
+
+[dependencies]
+lrcs-core = { path = "../core" }
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+
+# built on its own (cargo build --release --target wasm32-unknown-unknown), not part of the app
+[workspace]
