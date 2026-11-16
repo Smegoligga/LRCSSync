@@ -23,9 +23,13 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: 22
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - name: Tag module for the web version
+        run: cargo build --release --target wasm32-unknown-unknown --manifest-path web-tags/Cargo.toml
       - name: UI tests
         run: node --test tests/*.test.mjs
-      - uses: dtolnay/rust-toolchain@stable
       - name: Core tests
         run: cargo test --release --manifest-path core/Cargo.toml
 
@@ -67,13 +71,18 @@ jobs:
         with:
           node-version: 22
           cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
       - name: Web build
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.v.outputs.tag }}
           V: ${{ steps.v.outputs.version }}
+          LRCSSYNC_REQUIRE_TAGS: "1"
         run: |
           npm ci
+          cargo build --release --target wasm32-unknown-unknown --manifest-path web-tags/Cargo.toml
           node scripts/build-web.mjs "LRCSSync_${V}_web.html"
           gh release upload "$TAG" "LRCSSync_${V}_web.html" --clobber
       - name: Sync notes of older releases

@@ -2,7 +2,9 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Permissions for the main window",
-  "windows": ["main"],
+  "windows": [
+    "main"
+  ],
   "permissions": [
     "core:default",
     "allow-analyze",
@@ -12,7 +14,26 @@
     "allow-genius-lyrics",
     {
       "identifier": "opener:allow-open-url",
-      "allow": [{ "url": "https://genius.com/*" }, { "url": "https://*.genius.com/*" }]
+      "allow": [
+        {
+          "url": "https://genius.com/*"
+        },
+        {
+          "url": "https://*.genius.com/*"
+        },
+        {
+          "url": "https://github.com/Smegoligga/*"
+        },
+        {
+          "url": "https://smegolas.com/*"
+        },
+        {
+          "url": "https://smegolas.com"
+        },
+        {
+          "url": "obtainium://*"
+        }
+      ]
     },
     "dialog:default",
     "fs:default",
@@ -23,11 +44,28 @@
     "fs:allow-exists",
     {
       "identifier": "fs:scope",
-      "allow": [{ "path": "**" }, { "path": "/**" }]
+      "allow": [
+        {
+          "path": "**"
+        },
+        {
+          "path": "/**"
+        }
+      ]
     },
     {
       "identifier": "http:default",
-      "allow": [{ "url": "https://lrclib.net/*" }, { "url": "https://genius.com/*" }]
+      "allow": [
+        {
+          "url": "https://lrclib.net/*"
+        },
+        {
+          "url": "https://genius.com/*"
+        },
+        {
+          "url": "https://api.github.com/repos/Smegoligga/LRCSSync/*"
+        }
+      ]
     }
   ]
 }
